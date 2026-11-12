@@ -13,51 +13,73 @@ import {
 	checkoutWorkspace,
 	fileRunFiles,
 	ghTarball,
-} from "../../../server/controller.ts";
-import { prepareRepairTree, readPatch } from "../../../src/build.ts";
-import { acceptanceEntries } from "../../../src/accept.ts";
-import { digestOf, isDigest } from "../../../src/run.ts";
-import { fieldOf, objectOf, parseJson, textOf } from "../../../server/sandbox/json.ts";
-import { isGitSha } from "../../../src/workflow.ts";
+} from "../../../../../server/controller.ts";
+import { prepareRepairTree, readPatch } from "../../../../../src/build.ts";
+import { acceptanceEntries } from "../../../../../src/accept.ts";
+import { digestOf, isDigest } from "../../../../../src/run.ts";
+import {
+	readPlatformFile,
+	resolvePlatform,
+} from "../../../../../src/platform.ts";
+import {
+	fieldOf,
+	objectOf,
+	parseJson,
+	textOf,
+} from "../../../../../server/sandbox/json.ts";
+import { isGitSha } from "../../../../../src/workflow.ts";
 import {
 	launchSandbox,
 	locateBundle,
 	SANDBOX_ROOT,
-} from "../../../server/sandbox.ts";
-import { startGatewayProcess } from "../../../server/sandbox/gateway-client.ts";
-import { builtinTable } from "../../../server/sandbox/routes.ts";
-import { detectArch } from "../../../server/sandbox/seccomp.ts";
-import { stopScopeArgv } from "../../../server/sandbox/scope.ts";
+} from "../../../../../server/sandbox.ts";
+import { startGatewayProcess } from "../../../../../server/sandbox/gateway-client.ts";
+import { builtinTable } from "../../../../../server/sandbox/routes.ts";
+import { detectArch } from "../../../../../server/sandbox/seccomp.ts";
+import { stopScopeArgv } from "../../../../../server/sandbox/scope.ts";
 
 const [stateArg, id] = process.argv.slice(2);
+
 assert.ok(
 	stateArg && id && isDigest(id),
 	"usage: repair-probe.ts <state-dir> <run-id>",
 );
+
 const stateDir = resolve(stateArg);
 const contract = await fileRunFiles(stateDir).readContract(id);
+
 assert.equal(contract.kind, "found");
+
 if (contract.kind !== "found") throw new Error("contract unavailable");
+
 const acceptance = await fileRunFiles(stateDir).artifacts.read(
 	id,
 	contract.contract,
 	contract.digest,
 );
+
 assert.equal(acceptance.kind, "found");
+
 if (acceptance.kind !== "found") throw new Error("acceptance unavailable");
+
 const patch = readPatch(stateDir, {
 	runId: id,
 	baseSha: contract.contract.base.sha,
 	contractDigest: contract.digest,
 	acceptanceDigest: acceptance.receipt.acceptanceDigest,
 });
+
 assert.equal(patch.kind, "found");
+
 if (patch.kind !== "found") throw new Error("patch unavailable");
+
 const dir = join(stateDir, `repair-probe-${randomBytes(4).toString("hex")}`);
 const base = join(dir, "base");
 const workspace = join(dir, "repair");
 const gatewayDir = join(dir, "gateway");
+
 mkdirSync(base, { recursive: true, mode: 0o700 });
+
 const checked = await checkoutWorkspace({
 	stateDir: dir,
 	runId: id,
@@ -66,21 +88,27 @@ const checked = await checkoutWorkspace({
 	sha: contract.contract.base.sha,
 	fetch: ghTarball,
 });
+
 assert.equal(checked.kind, "ready");
+
 const canary = readFileSync(
 	join(stateDir, "acceptance", id, "canary.txt"),
 	"utf8",
 ).trim();
+
 for (const [path, bytes] of acceptanceEntries(acceptance.suite, canary)) {
 	if (!path.startsWith("checks/")) continue;
 	const destination = join(base, "test/acceptance/prior", path);
 	mkdirSync(join(destination, ".."), { recursive: true });
 	writeFileSync(destination, bytes);
 }
+
 const feedbackPath = join(stateDir, "validation", id, "feedback.json");
+
 const feedback = existsSync(feedbackPath)
 	? readFileSync(feedbackPath, "utf8")
 	: "[]\n";
+
 await prepareRepairTree(
 	base,
 	workspace,
@@ -88,25 +116,42 @@ await prepareRepairTree(
 	patch.receipt.changedPaths,
 	feedback,
 );
+
 assert.equal(existsSync(join(workspace, "test/acceptance")), false);
+
 assert.equal(existsSync(join(workspace, ".git")), false);
+
 assert.equal(existsSync(join(workspace, "node_modules")), false);
 
-const verdict = objectOf(parseJson(
-	readFileSync(join(stateDir, "validation", id, "verdict.json"), "utf8"),
-));
+const verdict = objectOf(
+	parseJson(
+		readFileSync(join(stateDir, "validation", id, "verdict.json"), "utf8"),
+	),
+);
 
 const candidateSha = textOf(fieldOf(verdict, "candidateSha"));
 
 assert.ok(candidateSha !== null && isGitSha(candidateSha));
+
 const bundle = await locateBundle(SANDBOX_ROOT);
 const arch = detectArch(process.arch);
+
 assert.ok(bundle && arch);
+
+const platform = await resolvePlatform({
+	env: (name) => process.env[name],
+	readFile: () => readPlatformFile(),
+});
+
+if (!platform.ok) throw new Error(`platform_invalid reason=${platform.reason}`);
+
 const gateway = await startGatewayProcess({
 	gatewayDir,
+	platform: platform.profile,
 	auditPath: join(dir, "egress.jsonl"),
 	readyTimeoutMs: 10_000,
 	table: builtinTable({
+		platform: platform.profile,
 		stage: "build",
 		runId: id,
 		attempt: 1,
@@ -116,8 +161,11 @@ const gateway = await startGatewayProcess({
 		modelRequests: 1,
 	}),
 });
+
 assert.ok(gateway.ok);
+
 if (!gateway.ok) throw new Error("gateway unavailable");
+
 const source = String.raw`
 import {execFileSync, spawnSync} from 'node:child_process';
 import {existsSync,readdirSync,readFileSync,lstatSync} from 'node:fs';
@@ -140,9 +188,12 @@ out.gateway=(await fetch('http://127.0.0.1:18080/github/repos/'+input.repo+'/con
 out.hostedTools=(await fetch('http://127.0.0.1:18080/openai/v1/responses',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'gpt-6.1-sol',input:'fetch published suite',tools:[{type:'web_search'}]}),signal:AbortSignal.timeout(5000)})).status;
 console.log('PROBE '+JSON.stringify(out));
 `;
+
+let status = 1;
 let unit: string | null = null;
 let stdout = "";
 let stderr = "";
+
 try {
 	const launched = launchSandbox({
 		stateDir,
@@ -163,6 +214,7 @@ try {
 			source,
 		],
 	});
+
 	assert.ok(launched);
 	unit = launched.unit;
 	launched.child.stdout?.on("data", (chunk) => {
@@ -171,10 +223,12 @@ try {
 	launched.child.stderr?.on("data", (chunk) => {
 		stderr += chunk;
 	});
+
 	const ended = new Promise<number | null>((done, reject) => {
 		launched.child.once("close", done);
 		launched.child.once("error", reject);
 	});
+
 	launched.child.stdin?.end(
 		JSON.stringify({
 			repo: contract.contract.base.repo,
@@ -194,13 +248,16 @@ try {
 	const line = stdout.split("\n").find((value) => value.startsWith("PROBE "));
 	assert.ok(line, `no probe output; exit=${exit} stderrBytes=${stderr.length}`);
 	const seen = JSON.parse(line.slice(6));
+
 	const audit = readFileSync(join(dir, "egress.jsonl"), "utf8")
 		.trim()
 		.split("\n")
 		.map((line) => JSON.parse(line));
+
 	const models = audit.filter(
 		(entry) => entry.decision === "forward" && entry.route?.startsWith("model"),
 	);
+
 	const pass =
 		exit === 0 &&
 		seen.freshInstall === 0 &&
@@ -217,6 +274,7 @@ try {
 		models.length === 0 &&
 		!stdout.includes(canary) &&
 		!stderr.includes(canary);
+
 	console.log(
 		JSON.stringify(
 			{
@@ -233,10 +291,11 @@ try {
 			2,
 		),
 	);
-	process.exitCode = pass ? 0 : 1;
+	status = pass ? 0 : 1;
 } finally {
 	if (unit !== null) {
 		const [command, ...args] = stopScopeArgv(unit);
+
 		try {
 			execFileSync(command ?? "systemctl", args, {
 				env: { ...process.env, XDG_RUNTIME_DIR: "/run/user/1000" },
@@ -251,12 +310,16 @@ try {
 					encoding: "utf8",
 				},
 			);
+
 			if (remaining.trim() !== "") {
 				console.error("the owned repair scope remains after stop");
-				process.exitCode = 1;
+				status = 1;
 			}
 		}
 	}
+
 	await gateway.handle.shutdown();
 	rmSync(dir, { recursive: true, force: true });
 }
+
+if (status !== 0) process.exit(status);

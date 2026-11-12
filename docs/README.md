@@ -13,7 +13,7 @@ Each path below is authoritative, current, later, background or historical. Read
 | `statecharts/` | Current | Bounded TLA+ models of the factory and the TypeScript that replays them against runtime tests. |
 | `history/path-map.md` | Current | Old path to new path for every file the layout program moves, bound to a revision. |
 | `handoff.md` | Historical | The original 2026-10-28 handoff. `AGENTS.md` replaces it. |
-| `prototypes/` | Historical | Early experiment evidence. Some directories still hold probes that `.pi/skills/verify-factory` recipes run until L02 moves them. |
+| `prototypes/` | Historical | Early experiment evidence. The probes that current recipes run moved to `.pi/skills/verify-factory/probes/` in L02. |
 
 ## Citations
 

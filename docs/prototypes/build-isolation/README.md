@@ -1,6 +1,6 @@
 # Build workspace isolation
 
-> **Historical.** This directory records the build workspace isolation prototype. It is evidence, not current guidance. `docs/README.md` lists the current documents. The probe programs in this directory are still maintained. Verification recipes run them until `docs/plans/codebase-layout.md` L02 moves them to `.pi/skills/verify-factory/probes/`.
+> **Historical.** This directory records the build workspace isolation prototype. It is evidence, not current guidance. `docs/README.md` lists the current documents. L02 moved `probe.ts` and `self-test.mjs` to `.pi/skills/verify-factory/probes/build-isolation/`. The commands below name their old paths.
 
 Run `node --test docs/prototypes/build-isolation/self-test.mjs` before the live probe. Its controls execute the shipped detector and PASS predicate with isolated files and stubbed networking; they are detector tests, not live isolation evidence.
 

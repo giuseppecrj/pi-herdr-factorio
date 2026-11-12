@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
-import { spawn, execFileSync, type ChildProcess } from "node:child_process";
+import {
+	spawn,
+	spawnSync,
+	execFileSync,
+	type ChildProcess,
+} from "node:child_process";
 import {
 	cp,
 	mkdir,
@@ -7,6 +12,7 @@ import {
 	readFile,
 	readdir,
 	readlink,
+	realpath,
 	rm,
 	symlink,
 	stat,
@@ -17,7 +23,11 @@ import { tmpdir } from "node:os";
 import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import { acquireLock, procTable } from "../../server/controller.ts";
 import { manifestDigest } from "../../server/sandbox/manifest.ts";
-import { readReplayBudget, replayRow } from "../../src/replay.ts";
+import {
+	readReplayBudget,
+	replayRow,
+	replayStageCaps,
+} from "../../src/replay.ts";
 import { digestOf, runIdOf } from "../../src/run.ts";
 import { ledgerRowOf } from "../../src/ledger.ts";
 
@@ -100,17 +110,16 @@ async function restored() {
 it("waits for two visible-test deadlines plus 60 seconds after signaling stop", async () => {
 	const source = await readFile(script, "utf8");
 	const stop = source.match(/stop_child\(\) \{[\s\S]*?\n\}/)?.[0];
+	const step = source.match(/^replay_step\(\) \{.*\}$/m)?.[0] ?? "";
 	assert.ok(stop);
 
 	const sandbox = await readFile("server/sandbox.ts", "utf8");
 
-	const limit =
-		sandbox.match(/export const VISIBLE_LIMIT_MS = ([\d_]+);/)?.[1] ??
-		sandbox.match(
-			/timer = setTimeout\(\(\) => \{\s*timedOut = true;[\s\S]*?\}, ([\d_]+)\);/,
-		)?.[1];
+	const limit = sandbox.match(
+		/^export const VISIBLE_LIMIT_MS = ([\d_]+);$/m,
+	)?.[1];
 
-	assert.ok(limit);
+	assert.ok(limit, "server/sandbox.ts declares VISIBLE_LIMIT_MS");
 
 	const polls = Math.ceil(
 		((2 * Number(limit.replaceAll("_", ""))) / 1000 + 60) * 10,
@@ -135,6 +144,7 @@ alive() { polls=$((polls + 1)); (( polls <= target )); }
 owned() { return 0; }
 kill() { [[ "$*" == "-TERM 123" ]]; }
 sleep() { [[ "$1" == 0.1 ]]; }
+${step}
 ${stop}
 stop_child
 printf '%s' "$polls"
@@ -150,6 +160,160 @@ printf '%s' "$polls"
 		assert.equal(Number(output), polls + 1);
 	} finally {
 		await rm(join(pidfile, ".."), { recursive: true, force: true });
+	}
+});
+
+it("refuses to signal or wait when the visible-test deadline is not declared", async () => {
+	const source = await readFile(script, "utf8");
+	const stop = source.match(/stop_child\(\) \{[\s\S]*?\n\}/)?.[0];
+	const step = source.match(/^replay_step\(\) \{.*\}$/m)?.[0];
+	assert.ok(stop && step);
+
+	const fake = await mkdtemp(join(tmpdir(), "stop-undeclared-"));
+	const steps = ".pi/skills/verify-factory/scripts/drive-replay.ts";
+
+	try {
+		await mkdir(join(fake, ".pi/skills/verify-factory/scripts"), {
+			recursive: true,
+		});
+		await cp(steps, join(fake, steps));
+		await mkdir(join(fake, "server"));
+		await writeFile(
+			join(fake, "server/sandbox.ts"),
+			"export const VISIBLE_LIMIT = 300_000;\n",
+		);
+		await writeFile(join(fake, "pid"), "123");
+
+		const result = spawnSync(
+			"bash",
+			[
+				"-c",
+				`
+set -euo pipefail
+pidfile="$1/pid"
+control="$1"
+polls=0
+alive() { polls=$((polls + 1)); (( polls <= 5 )); }
+owned() { return 0; }
+kill() { echo "signaled $*"; }
+sleep() { :; }
+${step}
+${stop}
+if stop_child; then echo "stopped after $polls"; else echo "refused after $polls"; fi
+`,
+				"stop-undeclared",
+				fake,
+			],
+			{ encoding: "utf8" },
+		);
+
+		assert.equal(result.stdout, "refused after 1\n");
+		assert.match(result.stderr, /visible-test deadline not found/);
+	} finally {
+		await rm(fake, { recursive: true, force: true });
+	}
+});
+
+it("keeps the production hold unless the stopped fixture's labels are well formed", async () => {
+	const steps = ".pi/skills/verify-factory/scripts/drive-replay.ts";
+	const fake = await mkdtemp(join(tmpdir(), "stopped-fixture-"));
+	const path = join(fake, "stopped-fixture.json");
+
+	const disarmed = async (labels: string) => {
+		await writeFile(path, `{"labels":${labels}}`);
+
+		return spawnSync(process.execPath, [steps, "fixture-disarmed", path], {
+			encoding: "utf8",
+		}).status;
+	};
+
+	try {
+		assert.equal(await disarmed("[]"), 0);
+		assert.equal(await disarmed('[{"name":"factory:enabled"}]'), 0);
+
+		for (const labels of [
+			"null",
+			"{}",
+			'[{"name":"factory:ready"}]',
+			"[null]",
+			'["factory:ready"]',
+			"[{}]",
+			'[{"name":1}]',
+			'[{"name":"factory:enabled"},7]',
+		])
+			assert.notEqual(await disarmed(labels), 0, labels);
+	} finally {
+		await rm(fake, { recursive: true, force: true });
+	}
+});
+
+it("signals only a live serve process for this lane's state directory", async () => {
+	const source = await readFile(script, "utf8");
+	const alive = source.match(/^alive\(\) \{.*\}$/m)?.[0];
+	const owned = source.match(/^owned\(\) \{\n[\s\S]*?\n\}\n/m)?.[0];
+	const step = source.match(/^replay_step\(\) \{.*\}$/m)?.[0] ?? "";
+	assert.ok(alive && owned);
+
+	const lane = await mkdtemp(join(tmpdir(), "owned-lane-"));
+	const state = join(lane, "state");
+	const children: ChildProcess[] = [];
+
+	const start = (...args: string[]) => {
+		const child = spawn(
+			process.execPath,
+			["-e", "setInterval(() => {}, 1000)", ...args],
+			{ stdio: "ignore" },
+		);
+
+		children.push(child);
+		assert.ok(child.pid);
+
+		return child.pid;
+	};
+
+	const verdict = (pid: number) =>
+		execFileSync(
+			"bash",
+			[
+				"-c",
+				`
+set -euo pipefail
+lane="$1"
+control="$2"
+${step}
+${alive}
+${owned}
+if alive "$3" && owned "$3"; then echo owned; else echo foreign; fi
+`,
+				"owned",
+				lane,
+				resolve("."),
+				String(pid),
+			],
+			{ encoding: "utf8" },
+		).trim();
+
+	try {
+		const serve = start("server/cli.ts", "serve", "--state-dir", state);
+		const other = start("server/cli.ts", "serve", "--state-dir", `${state}2`);
+		const tick = start("server/cli.ts", "tick", "--state-dir", state);
+		const bare = start("serve", "--state-dir", state);
+		const dangling = start("server/cli.ts", "serve", "--state-dir");
+		await new Promise((r) => setTimeout(r, 100));
+
+		assert.equal(verdict(serve), "owned");
+
+		for (const pid of [other, tick, bare, dangling])
+			assert.equal(verdict(pid), "foreign", String(pid));
+
+		const gone = children[0];
+		assert.ok(gone);
+		gone.kill("SIGKILL");
+		await new Promise((r) => gone.on("close", r));
+		assert.equal(verdict(serve), "foreign");
+	} finally {
+		for (const child of children) child.kill("SIGKILL");
+		await rm(lane, { recursive: true, force: true });
 	}
 });
 
@@ -171,6 +335,7 @@ describe("replay driver with fake GitHub/controller and real guards", {
 			".github/factory",
 			"test/fixtures/replay",
 			script,
+			".pi/skills/verify-factory/scripts/drive-replay.ts",
 			".pi/skills/verify-factory/scripts/lane-id.sh",
 		]) {
 			const target = join(control, path);
@@ -539,6 +704,88 @@ esac
 		assert.equal(record.caseId, "c3");
 		assert.equal(record.side, "prev");
 		assert.equal(record.issue, 900);
+	});
+
+	it("prepares the restore journal, preflight, replay record and reservation before serve", async () => {
+		const run = drive();
+		await ready(run);
+		const sha = git(control, "rev-parse", "HEAD");
+		const real = await realpath(control);
+
+		const corpus = JSON.parse(
+			await readFile(join(control, "test/fixtures/replay/corpus.json"), "utf8"),
+		);
+
+		const c3 = corpus.cases.find((c: { id: string }) => c.id === "c3");
+
+		const stageCaps = await replayStageCaps(sha, async (cmd, args) => ({
+			code: 0,
+			stdout: execFileSync(cmd, args, { cwd: control, encoding: "utf8" }),
+			stderr: "",
+		}));
+
+		assert.deepEqual(
+			JSON.parse(await readFile(join(root, "replay-restore.json"), "utf8")),
+			{
+				v: 1,
+				oldBundle: `assets-${"e".repeat(64)}`,
+				serviceState: "active",
+				hadHold: false,
+				issue: 900,
+				fixtureLabel: "factory:ready",
+				lane,
+				production: join(dir, "home/factory-state"),
+				sandbox: join(dir, "sandbox"),
+				out: join(dir, "output"),
+				pr: "F12a-replay-c3",
+				n: "1",
+				trusted: sha,
+				bootstrap: false,
+				control: real,
+				mainSha: sha,
+				grant: "local-test-grant",
+				root,
+			},
+		);
+
+		assert.equal((await stat(join(lane, "preflight"))).mode & 0o777, 0o700);
+
+		assert.deepEqual(
+			JSON.parse(await readFile(join(lane, "replay.json"), "utf8")),
+			{
+				v: 1,
+				caseId: "c3",
+				corpusDigest: corpus.digest,
+				issueDigest: c3.issueDigest,
+				side: "prev",
+				issue: 900,
+				headSha: sha,
+				mainSha: sha,
+				terminalMainSha: null,
+				runId: null,
+				stageCaps,
+				controlSha: sha,
+				bootstrap: false,
+				grant: "local-test-grant",
+				status: "prepared",
+			},
+		);
+
+		const budget = await readReplayBudget(join(root, "replay-budget.json"));
+		assert.equal(budget.reservations.length, 1);
+
+		assert.partialDeepStrictEqual(budget.reservations[0], {
+			key: join(lane, "state"),
+			status: "reserved",
+		});
+
+		assert.match(
+			await readFile(join(dir, "output/replay-check.json"), "utf8"),
+			/\S/,
+		);
+		assert.equal((await drive("stop").done).code, 0);
+		assert.equal((await run.done).code, 0);
+		await restored();
 	});
 
 	for (const [unitMask, expected] of [

@@ -7,4 +7,4 @@ This folder holds Pi project resources for sessions that work on this repository
 | `skills/` | Yes | Coordinator skills. See `skills/README.md`. |
 | `daily-log/` | No, ignored | Personal daily notes written by the `daily-log-pi-herdr-factorio` skill. |
 
-Lint and format checks skip `.pi/`. `npm run check:layout` still checks its TypeScript imports and its shell scripts' path tokens.
+`npm run check` typechecks, lints and formats the TypeScript in `skills/`, and `npm run check:layout` checks its imports and its shell scripts' path tokens. Nothing outside `skills/` is checked, and the trusted gate never copies it from a candidate.

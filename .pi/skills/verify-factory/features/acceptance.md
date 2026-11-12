@@ -10,7 +10,7 @@ Every passing lane spends model tokens and needs the model-spend grant as well a
 - `accept-summary`: the comment ends `<!-- factory-acceptance run=<runId> a=<acceptanceDigest> -->`, lists `S<n>: A<n>, ...` and discloses the acceptance author's observed family. Acceptance alone does not establish cross-family review. It has no file path, test code, judge text or canary.
 - `accept-store`: `<state>/acceptance/<runId>/` holds `receipt.json`, `suite.json`, `manifest.json`, `checks/*` and `canary.txt`, mode 0600 in 0700 directories, plus the anchor `<state>/acceptance/<runId>.json`. The receipt's `contractDigest` and `baseSha` match the contract receipt, and its `isolation` is the family disclosure. A fresh `fileRunFiles(<state>).artifacts.read` returns `found` and its digest equals `acceptanceDigestOf` recomputed from the stored bytes.
 - `accept-canary`: the canary is in `canary.txt`, `suite.json` and every check file, and not in the receipt.
-- `accept-isolation`: `docs/prototypes/acceptance-isolation/probe.ts` against the stored run prints `"result": "PASS"` and spends no model tokens.
+- `accept-isolation`: `.pi/skills/verify-factory/probes/acceptance-isolation/probe.ts` against the stored run prints `"result": "PASS"` and spends no model tokens.
 - `accept-needs-info`: a specify `needs_info` never launches accept.
 
 ## How to get to it (user POV)
@@ -26,7 +26,7 @@ Preconditions are those of `specify.md`. `readlink /var/lib/factory-sandbox/curr
 3. Run `vm.sh drive-stage.sh <pr-id> <worker-n> <issue>`. Its evidence lists the specify and accept receipts and their egress.
 4. On the VM, read both receipts and check the store with a script in the lane workspace that calls `fileRunFiles(<state>).readContract` and `artifacts.read`. Print modes, digests, scenario IDs, criteria and file sizes only.
 5. Count specify's root receipt once and accept's receipt once. Per-request tokens are `inputTokens` and `outputTokens` in each session's `egress.jsonl`. Reserve the current 100,000-token accept allowance and retain the plan's applicable wall limits. The older 25,000-token and combined 45,000-token limits are historical, not current launch caps. Check the private base qualification receipt before allowing build.
-6. Run `node docs/prototypes/acceptance-isolation/probe.ts <state> <runId>` from the lane workspace with `XDG_RUNTIME_DIR=/run/user/1000`.
+6. Run `node .pi/skills/verify-factory/probes/acceptance-isolation/probe.ts <state> <runId>` from the lane workspace with `XDG_RUNTIME_DIR=/run/user/1000`.
 7. Read the comments through `gh` and check `accept-summary`. Continue scoped ticks until the base check qualifies the suite or refuses it. A suite-ready result is not terminal success.
 8. If build is in scope and qualification passed, run the next scoped `drive-stage.sh` tick and follow `build.md`. Reserve its full 400,000-token allowance before launching.
 9. Close every fixture, confirm CLOSED, snapshot again and run `cleanup.sh`.

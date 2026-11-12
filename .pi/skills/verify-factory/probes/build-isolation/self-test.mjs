@@ -7,23 +7,31 @@ import { test } from "node:test";
 import vm from "node:vm";
 
 const text = fs.readFileSync(new URL("./probe.ts", import.meta.url), "utf8");
+
 const source = text
 	.match(/const source = String.raw`([\s\S]*?)`;/)[1]
 	.replace(/^import .*;$/gm, "");
+
 const predicate = text.match(/const pass =([\s\S]*?);\n\n\tconsole.log/)[1];
+
 const inputSource = text.match(
 	/const input = ([\s\S]*?);\n\nconst stageDir/,
 )[1];
+
 const tools = ["read", "grep", "ls", "bash", "write", "edit"];
 const canary = `factory-holdout-${"b".repeat(64)}`;
 const id = "a".repeat(64);
+
 const body =
 	'import assert from "node:assert/strict"; assert.equal(PRIVATE_FIXTURE,42);';
+
 const path = "private-heldout.test.ts";
+
 const raw = JSON.stringify({
 	version: 1,
 	files: [{ path, type: "node:test", content: body }],
 });
+
 const hash = (s) => createHash("sha256").update(s).digest("hex");
 
 function probeInput({ contract = { files: [] }, base = [] } = {}) {

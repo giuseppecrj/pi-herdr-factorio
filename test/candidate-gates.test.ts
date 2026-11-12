@@ -241,6 +241,75 @@ test("merged tree takes candidate scripts but still drops nested config inside t
 	assert.deepEqual(result.ignoredChanges, ["scripts/biome.json"]);
 });
 
+test("merged tree takes maintained skills and formal TypeScript, never private Pi state or acceptance", async (t) => {
+	const f = repo(t);
+	const probe = ".pi/skills/verify-factory/probes/p/probe.ts";
+	f.put(probe, "main probe\n");
+	f.put(".pi/skills/verify-factory/probes/p/README.md", "main readme\n");
+	f.put(".pi/skills/verify-factory/scripts/gone.ts", "main\n");
+	f.put("docs/statecharts/journey/view.ts", "main view\n");
+	f.put("docs/statecharts/journey/Journey.tla", "main model\n");
+	f.put("test/acceptance/1/checks/a.test.ts", "main acceptance\n");
+	const gateSha = f.commit();
+
+	f.put(probe, "candidate probe\n");
+	f.put(".pi/skills/verify-factory/probes/p/README.md", "candidate readme\n");
+	rmSync(join(f.root, ".pi/skills/verify-factory/scripts/gone.ts"));
+	f.put(".pi/skills/verify-factory/biome.json", "{}");
+	f.put("docs/statecharts/journey/view.ts", "candidate view\n");
+	f.put(".pi/daily-log/2026-11-12.md", "private log\n");
+	f.put(".pi/loops/loop.json", "{}");
+	f.put(".pi/sessions/s.jsonl", "{}\n");
+	const sha = f.commit();
+	const dest = join(f.root, "out");
+
+	const result = await materializeCandidate({
+		repository: f.root,
+		gateSha,
+		candidateSha: sha,
+		dest,
+		replacements: [],
+	});
+
+	assert.equal(readFileSync(join(dest, probe), "utf8"), "candidate probe\n");
+
+	assert.equal(
+		readFileSync(
+			join(dest, ".pi/skills/verify-factory/probes/p/README.md"),
+			"utf8",
+		),
+		"candidate readme\n",
+	);
+
+	assert.equal(
+		readFileSync(join(dest, "docs/statecharts/journey/view.ts"), "utf8"),
+		"candidate view\n",
+	);
+
+	assert.equal(
+		readFileSync(join(dest, "docs/statecharts/journey/Journey.tla"), "utf8"),
+		"main model\n",
+	);
+
+	for (const path of [
+		".pi/skills/verify-factory/scripts/gone.ts",
+		".pi/skills/verify-factory/biome.json",
+		".pi/daily-log",
+		".pi/loops",
+		".pi/sessions",
+	])
+		assert.equal(existsSync(join(dest, path)), false, path);
+
+	assert.deepEqual(result.newTests, []);
+
+	assert.deepEqual(result.ignoredChanges, [
+		".pi/daily-log/2026-11-12.md",
+		".pi/loops/loop.json",
+		".pi/sessions/s.jsonl",
+		".pi/skills/verify-factory/biome.json",
+	]);
+});
+
 test("a candidate defect cannot pass preserved regression tests; receipts bind both SHAs", async (t) => {
 	const f = repo(t);
 	f.put("src/value.ts", 'export const value = "wrong";\n');
@@ -553,6 +622,44 @@ test("visible suite excludes heavy integration tests without losing CI or gate c
 	);
 });
 
+test("trusted lint and format check the roots npm run check does, without checking held-out acceptance", () => {
+	const root = existsSync("/g/tooling/.github/factory/gates/gates.json")
+		? "/g/tooling"
+		: ".";
+
+	const manifest = JSON.parse(
+		readFileSync(join(root, ".github/factory/gates/gates.json"), "utf8"),
+	);
+
+	const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+
+	const argv = (name: string): string[] =>
+		manifest.checks.find((c: { name: string }) => c.name === name).argv;
+
+	const roots = (script: string, tool: string) =>
+		script
+			.slice(script.indexOf(tool) + tool.length)
+			.trim()
+			.split(/\s+/);
+
+	const lintRoots = roots(pkg.scripts.lint, "oxlint");
+	assert.ok(lintRoots.includes(".pi/skills"));
+	assert.ok(lintRoots.includes("docs/statecharts"));
+	assert.deepEqual(argv("lint").slice(-lintRoots.length), lintRoots);
+
+	assert.deepEqual(
+		argv("lint").slice(
+			argv("lint").indexOf("--ignore-pattern"),
+			argv("lint").indexOf("--ignore-pattern") + 2,
+		),
+		["--ignore-pattern", "test/acceptance/**"],
+	);
+
+	const formatRoots = roots(pkg.scripts["format:check"], "biome format");
+	assert.deepEqual(formatRoots, lintRoots);
+	assert.deepEqual(argv("format").slice(-formatRoots.length), formatRoots);
+});
+
 test("removes nested ignore files and candidate-deleted source", async (t) => {
 	const f = repo(t);
 	f.git("rm", "src/value.ts");
@@ -649,6 +756,34 @@ for (const source of [
 		assert.equal(r.reason, "runtime_patching");
 		assert.match(JSON.stringify(r), /src\/patch.ts/);
 	});
+
+test("maintained probes pass the tamper scan when a candidate adds them", async (t) => {
+	const f = repo(t);
+
+	const probes = [
+		".pi/skills/verify-factory/probes/acceptance-isolation/probe.ts",
+		".pi/skills/verify-factory/probes/build-isolation/probe.ts",
+		".pi/skills/verify-factory/probes/heldout-ci/repair-probe.ts",
+	];
+
+	for (const path of probes) f.put(path, readFileSync(path, "utf8"));
+
+	const r = await checkCandidate(gateInput(f, f.commit()));
+	assert.deepEqual(r.tamperSignals, []);
+	assert.equal(r.status, "passed");
+});
+
+test("runtime patching in a maintained skill is still rejected", async (t) => {
+	const f = repo(t);
+	const path = ".pi/skills/verify-factory/probes/p/probe.ts";
+	f.put(path, "process.exitCode = 1;\n");
+	const r = await checkCandidate(gateInput(f, f.commit()));
+	assert.equal(r.status, "failed");
+	assert.equal(r.reason, "runtime_patching");
+	assert.deepEqual(r.tamperSignals, [
+		{ path, line: 1, rule: "runtime_patching" },
+	]);
+});
 
 for (const directive of [
 	"@ts-nocheck",

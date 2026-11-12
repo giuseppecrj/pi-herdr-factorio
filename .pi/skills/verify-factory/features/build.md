@@ -26,7 +26,7 @@ A qualified private acceptance suite permits build. Follow the run's patch summa
 3. Run `vm.sh drive-stage.sh <pr-id> <worker-n> <issue>` for specify and accept. Continue scoped ticks through base qualification. Verify the held-out store and qualification privately, then require build claimed.
 4. Run the same scoped command for build. Read build's stage receipt, private patch receipt and bound test receipt. Record tokens, requests and wall time per stage. Count each root receipt once.
 5. Through repository-scoped `gh`, inspect the build summary and validate transition marker. Require a measured visible pass and the base's resolved script in `tests.json`; the builder's prose or command reports do not prove it.
-6. On the VM run `node --test docs/prototypes/build-isolation/self-test.mjs`, then `XDG_RUNTIME_DIR=/run/user/1000 node docs/prototypes/build-isolation/probe.ts <state> <runId> <attempt>`. After cleanup the probe reconstructs a disposable workspace from the pinned base and stored patch, uses the real build mount shape, and removes the reconstruction afterward. Export only redacted results.
+6. On the VM run `node --test .pi/skills/verify-factory/probes/build-isolation/self-test.mjs`, then `XDG_RUNTIME_DIR=/run/user/1000 node .pi/skills/verify-factory/probes/build-isolation/probe.ts <state> <runId> <attempt>`. After cleanup the probe reconstructs a disposable workspace from the pinned base and stored patch, uses the real build mount shape, and removes the reconstruction afterward. Export only redacted results.
 7. Close and confirm every fixture. Preserve receipts/evidence, snapshot again, check lane-owned scopes/processes and run lane cleanup.
 
 ## Gotchas

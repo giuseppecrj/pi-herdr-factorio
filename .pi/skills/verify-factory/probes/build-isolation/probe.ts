@@ -15,19 +15,23 @@ import {
 	checkoutBuildWorkspace,
 	checkoutWorkspace,
 	ghTarball,
-} from "../../../server/controller.ts";
-import { patchedTree, readPatch } from "../../../src/build.ts";
+} from "../../../../../server/controller.ts";
+import { patchedTree, readPatch } from "../../../../../src/build.ts";
 import {
 	gitState,
 	launchSandbox,
 	locateBundle,
 	SANDBOX_ROOT,
-} from "../../../server/sandbox.ts";
-import { startGatewayProcess } from "../../../server/sandbox/gateway-client.ts";
-import { builtinTable } from "../../../server/sandbox/routes.ts";
-import { stopScopeArgv } from "../../../server/sandbox/scope.ts";
-import { detectArch } from "../../../server/sandbox/seccomp.ts";
-import { isDigest } from "../../../src/run.ts";
+} from "../../../../../server/sandbox.ts";
+import { startGatewayProcess } from "../../../../../server/sandbox/gateway-client.ts";
+import { builtinTable } from "../../../../../server/sandbox/routes.ts";
+import { stopScopeArgv } from "../../../../../server/sandbox/scope.ts";
+import { detectArch } from "../../../../../server/sandbox/seccomp.ts";
+import { isDigest } from "../../../../../src/run.ts";
+import {
+	readPlatformFile,
+	resolvePlatform,
+} from "../../../../../src/platform.ts";
 
 const [stateArg, runId, attempt = "1"] = process.argv.slice(2);
 
@@ -77,13 +81,16 @@ if (reconstructed) {
 		sha: bound.contract.base.sha,
 		fetch: ghTarball,
 	});
+
 	assert.equal(checked.kind, "ready", "cannot reconstruct base");
+
 	const kept = readPatch(stateDir, {
 		runId,
 		baseSha: bound.contract.base.sha,
 		contractDigest: bound.digest,
 		acceptanceDigest: suite.receipt.acceptanceDigest,
 	});
+
 	assert.equal(kept.kind, "found", "cannot reconstruct stored patch");
 
 	if (kept.kind !== "found") throw new Error("patch unavailable");
@@ -97,6 +104,7 @@ const canary = readFileSync(
 	join(stateDir, "acceptance", runId, "canary.txt"),
 	"utf8",
 ).trim();
+
 const bundle = await locateBundle(SANDBOX_ROOT);
 const arch = detectArch(process.arch);
 
@@ -104,21 +112,25 @@ assert.ok(bundle && arch);
 
 const tools = ["read", "grep", "ls", "bash", "write", "edit"];
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
+
 const privatePaths = [
 	`acceptance/${runId}`,
 	`acceptance/${runId}.json`,
 	`contracts/${runId}`,
 ];
+
 const privateTexts = suite.suite.files.flatMap((file) => [
 	file.content,
 	file.path,
 ]);
+
 const fingerprints = new Set(
 	suite.suite.files.flatMap((file) => [
 		hash(file.content),
 		hash(`${file.content}\n`),
 	]),
 );
+
 let rawOutputs = 0;
 
 const inventory = (relative: string, accept: boolean) => {
@@ -170,17 +182,27 @@ const stageDir = join(
 	runId,
 	`build-probe-${randomBytes(4).toString("hex")}`,
 );
+
 const gatewayDir = join(stateDir, "gw", randomBytes(4).toString("hex"));
 
 mkdirSync(stageDir, { recursive: true, mode: 0o700 });
 
 mkdirSync(join(stateDir, "gw"), { recursive: true, mode: 0o700 });
 
+const platform = await resolvePlatform({
+	env: (name) => process.env[name],
+	readFile: () => readPlatformFile(),
+});
+
+if (!platform.ok) throw new Error(`platform_invalid reason=${platform.reason}`);
+
 const gateway = await startGatewayProcess({
 	gatewayDir,
+	platform: platform.profile,
 	auditPath: join(stageDir, "egress.jsonl"),
 	readyTimeoutMs: 10_000,
 	table: builtinTable({
+		platform: platform.profile,
 		stage: "build",
 		runId,
 		attempt: Number(attempt),
@@ -277,6 +299,8 @@ console.log('PROBE ' + JSON.stringify(out));
 
 const runtime =
 	process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.()}`;
+
+let status = 1;
 let unit: string | null = null;
 let stdout = "";
 let stderr = "";
@@ -327,6 +351,7 @@ try {
 			`inconclusive: no probe output, exit ${code}, stderr ${stderr.length} bytes`,
 		);
 	const seen = JSON.parse(line.slice(6));
+
 	const privateOutputLeak = privateTexts.some(
 		(text) => stdout.includes(text) || stderr.includes(text),
 	);
@@ -370,7 +395,7 @@ try {
 			2,
 		),
 	);
-	process.exitCode = pass ? 0 : 1;
+	status = pass ? 0 : 1;
 } finally {
 	if (unit !== null) {
 		const [command, ...args] = stopScopeArgv(unit);
@@ -397,3 +422,5 @@ try {
 		rmSync(join(stateDir, "pristine", runId), { recursive: true, force: true });
 	}
 }
+
+if (status !== 0) process.exit(status);

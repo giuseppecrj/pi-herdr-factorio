@@ -8,17 +8,17 @@ lane="/home/exedev/factory-verification/$pr-w$n"
 out="/tmp/swarm-$pr/worker-$n"
 mkdir -p "$out"
 rm -f "$out/evidence.txt" "$out/status.txt" "$out/status.err"
-cp "$lane/ws/.pi/skills/verify-factory/scripts/status-driver.ts" "$lane/ws/.status-driver.ts" 2>/dev/null \
+[ -f "$lane/ws/.pi/skills/verify-factory/scripts/status-driver.ts" ] \
   || { echo "driver missing from lane workspace" >&2; exit 2; }
 start="$(date -u +%FT%TZ)"
 set +e
-(cd "$lane/ws" && node --experimental-strip-types .status-driver.ts status) > "$out/status.txt" 2> "$out/status.err"
+(cd "$lane/ws" && node --experimental-strip-types .pi/skills/verify-factory/scripts/status-driver.ts status) > "$out/status.txt" 2> "$out/status.err"
 rc=$?
 set -e
 end="$(date -u +%FT%TZ)"
 {
   echo "feature=factory-status"
-  echo "command=node --experimental-strip-types .status-driver.ts status (in $lane/ws)"
+  echo "command=node --experimental-strip-types .pi/skills/verify-factory/scripts/status-driver.ts status (in $lane/ws)"
   echo "GH_HOST=$GH_HOST origin=$(git -C "$lane/ws" remote get-url origin 2>/dev/null || echo none)"
   echo "head_sha=$(cat "$lane/head-sha")"
   echo "started=$start"

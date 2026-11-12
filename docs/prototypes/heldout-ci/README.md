@@ -1,6 +1,6 @@
 # Held-out CI publication proof
 
-> **Historical.** This directory records the F07c held-out CI publication proof. It is evidence, not current guidance. `docs/README.md` lists the current documents. The probe programs in this directory are still maintained. Verification recipes run them until `docs/plans/codebase-layout.md` L02 moves them to `.pi/skills/verify-factory/probes/`.
+> **Historical.** This directory records the F07c held-out CI publication proof. It is evidence, not current guidance. `docs/README.md` lists the current documents. L02 moved `repair-probe.ts` to `.pi/skills/verify-factory/probes/heldout-ci/`. `collect-probe.ts` stays here as history, because no current recipe runs it.
 
 F07c publishes a builder patch and then controller-owned checks as two deterministic Git Data commits. Validate is controller-only. It dispatches main's gates for the exact candidate, waits without a slot or model, and stores a bound verdict before deleting the fixture branch. Repair orchestration remains F08 work.
 
@@ -58,10 +58,10 @@ From a lane checkout with the original private run state retained:
 ```sh
 export GH_HOST=github.int.exe.xyz XDG_RUNTIME_DIR=/run/user/1000
 node docs/prototypes/heldout-ci/collect-probe.ts <state-dir> <run-id>
-node docs/prototypes/heldout-ci/repair-probe.ts <state-dir> <run-id>
+node .pi/skills/verify-factory/probes/heldout-ci/repair-probe.ts <state-dir> <run-id>
 ```
 
-The collection probe downloads the real receipt again through the repository-scoped artifact API and checks fresh GitHub run metadata against the private patch and suite. It does not dispatch or rewrite the run. The repair probe seeds the prior suite in a disposable base, sanitizes base plus prior patch, launches the real build-profile sandbox and removes its owned files and scope. Neither probe calls a model.
+The collection probe downloads the real receipt again through the repository-scoped artifact API and checks fresh GitHub run metadata against the private patch and suite. It does not dispatch or rewrite the run. The repair probe seeds the prior suite in a disposable base, sanitizes base plus prior patch, launches the real build-profile sandbox and removes its owned files and scope. Neither probe calls a model. The repair probe now lives in `.pi/skills/verify-factory/probes/heldout-ci/`, run by `features/validation.md`. The collection probe stays here as history.
 
 Drain the controller before deploying marker v2. Deployment is roll-forward only; legacy controllers reject v2. The parser still adopts old workflow digests and ignores legacy `validate.model` with a warning. New workflow settings omit that key.
 

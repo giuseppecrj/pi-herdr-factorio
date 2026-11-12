@@ -384,7 +384,10 @@ describe("private acceptance artifacts", () => {
 
 		const result = spawnSync(
 			process.execPath,
-			["--test", "docs/prototypes/acceptance-isolation/self-test.mjs"],
+			[
+				"--test",
+				".pi/skills/verify-factory/probes/acceptance-isolation/self-test.mjs",
+			],
 			{ encoding: "utf8", env },
 		);
 
