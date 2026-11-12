@@ -19277,7 +19277,7 @@ function freshProcess(
 			.href,
 		admission: new URL("../src/trust/admission.ts", import.meta.url).href,
 		fake: new URL("./fake-ticket-adapter.ts", import.meta.url).href,
-		result: new URL("../server/sandbox/result.ts", import.meta.url).href,
+		result: new URL("../host/sandbox/result.ts", import.meta.url).href,
 		platform: new URL("../src/trust/platform.ts", import.meta.url).href,
 	};
 
