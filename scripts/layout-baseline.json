@@ -3147,115 +3147,11 @@
 					}
 				},
 				{
-					"path": "test/src/controller/orchestrator-dispatch.test.ts",
-					"type": "file",
-					"via": {
-						"from": "reader",
-						"path": "../../../test/src/controller/orchestrator-dispatch.test.ts"
-					}
-				},
-				{
-					"path": "test/src/controller/orchestrator-base.test.ts",
-					"type": "file",
-					"via": {
-						"from": "reader",
-						"path": "../../../test/src/controller/orchestrator-base.test.ts"
-					}
-				},
-				{
-					"path": "test/src/controller/orchestrator-host.test.ts",
-					"type": "file",
-					"via": {
-						"from": "reader",
-						"path": "../../../test/src/controller/orchestrator-host.test.ts"
-					}
-				},
-				{
-					"path": "test/src/controller/orchestrator-accounting.test.ts",
-					"type": "file",
-					"via": {
-						"from": "reader",
-						"path": "../../../test/src/controller/orchestrator-accounting.test.ts"
-					}
-				},
-				{
-					"path": "test/src/controller/orchestrator-claims.test.ts",
-					"type": "file",
-					"via": {
-						"from": "reader",
-						"path": "../../../test/src/controller/orchestrator-claims.test.ts"
-					}
-				},
-				{
-					"path": "test/src/controller/orchestrator-recovery.test.ts",
-					"type": "file",
-					"via": {
-						"from": "reader",
-						"path": "../../../test/src/controller/orchestrator-recovery.test.ts"
-					}
-				},
-				{
-					"path": "test/src/controller/orchestrator-usage.test.ts",
-					"type": "file",
-					"via": {
-						"from": "reader",
-						"path": "../../../test/src/controller/orchestrator-usage.test.ts"
-					}
-				},
-				{
-					"path": "test/src/controller/orchestrator-evidence.test.ts",
-					"type": "file",
-					"via": {
-						"from": "reader",
-						"path": "../../../test/src/controller/orchestrator-evidence.test.ts"
-					}
-				},
-				{
-					"path": "test/src/controller/orchestrator-build.test.ts",
-					"type": "file",
-					"via": {
-						"from": "reader",
-						"path": "../../../test/src/controller/orchestrator-build.test.ts"
-					}
-				},
-				{
 					"path": "test/src/controller/orchestrator-validation.test.ts",
 					"type": "file",
 					"via": {
 						"from": "reader",
 						"path": "../../../test/src/controller/orchestrator-validation.test.ts"
-					}
-				},
-				{
-					"path": "test/src/controller/orchestrator-acceptance.test.ts",
-					"type": "file",
-					"via": {
-						"from": "reader",
-						"path": "../../../test/src/controller/orchestrator-acceptance.test.ts"
-					}
-				},
-				{
-					"path": "test/src/controller/orchestrator-specify.test.ts",
-					"type": "file",
-					"via": {
-						"from": "reader",
-						"path": "../../../test/src/controller/orchestrator-specify.test.ts"
-					}
-				},
-				{
-					"path": "test/src/controller/orchestrator-ledger.test.ts",
-					"type": "file",
-					"via": {
-						"from": "reader",
-						"path": "../../../test/src/controller/orchestrator-ledger.test.ts"
-					}
-				},
-				{
-					"path": "test/src/controller/orchestrator-characterization.test.ts",
-					"type": "file",
-					"via": {
-						"from": "reader",
-						"path": "../../../test/src/controller/orchestrator-characterization.test.ts"
 					}
 				},
 				{
@@ -4756,6 +4652,15 @@
 			"test/fixtures/**"
 		],
 		"allow": [
+			{
+				"reason": "node:test/reporters is a Node built-in, not a repository test path",
+				"files": [
+					"docs/statecharts/journey/replay-merge-mid-repair.ts"
+				],
+				"paths": [
+					"test/reporters"
+				]
+			},
 			{
 				"reason": "replay source aliases retain frozen corpus paths and resolve their guarded declarations after L08 moves",
 				"files": [

@@ -1,51 +1,81 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { run } from "node:test";
+import { tap } from "node:test/reporters";
 import { fileURLToPath } from "node:url";
 
-const files = [
-	"test/src/candidate/handoff.test.ts",
-	"test/src/controller/orchestrator-dispatch.test.ts",
-	"test/src/controller/orchestrator-base.test.ts",
-	"test/src/controller/orchestrator-host.test.ts",
-	"test/src/controller/orchestrator-accounting.test.ts",
-	"test/src/controller/orchestrator-claims.test.ts",
-	"test/src/controller/orchestrator-recovery.test.ts",
-	"test/src/controller/orchestrator-usage.test.ts",
-	"test/src/controller/orchestrator-evidence.test.ts",
-	"test/src/controller/orchestrator-build.test.ts",
-	"test/src/controller/orchestrator-validation.test.ts",
-	"test/src/controller/orchestrator-acceptance.test.ts",
-	"test/src/controller/orchestrator-specify.test.ts",
-	"test/src/controller/orchestrator-ledger.test.ts",
-	"test/src/controller/orchestrator-characterization.test.ts",
-	"test/src/github/publication.test.ts",
-].map((path) => fileURLToPath(new URL(`../../../${path}`, import.meta.url)));
+const selection = [
+	{
+		path: "test/src/candidate/handoff.test.ts",
+		patterns: [
+			/\bformal\b/,
+			/merged observation drains/,
+			/matching historical certificate/,
+			/base movement stops active review/,
+			/actual observer promotes/,
+		],
+	},
+	{
+		path: "test/src/controller/orchestrator-validation.test.ts",
+		patterns: [/\bformal\b/],
+	},
+	{
+		path: "test/src/github/publication.test.ts",
+		patterns: [/\bformal\b/],
+	},
+].map(({ path, patterns }) => ({
+	file: fileURLToPath(new URL(`../../../${path}`, import.meta.url)),
+	patterns,
+}));
 
-const result = spawnSync(
-	process.execPath,
-	[
-		"--experimental-strip-types",
-		"--test",
-		"--test-concurrency=1",
-		"--test-reporter=tap",
-		"--test-name-pattern=\\bformal\\b|merged observation drains|matching historical certificate|base movement stops active review|actual observer promotes",
-		...files,
-	],
-	{ encoding: "utf8" },
+const names = new Map<string, string[]>(
+	selection.map(({ file }) => [file, []]),
 );
 
-process.stdout.write(result.stdout);
+const result = { stdout: "", status: 1 };
 
-process.stderr.write(result.stderr);
+const tests = run({
+	files: selection.map(({ file }) => file),
+	concurrency: 1,
+	execArgv: ["--experimental-strip-types"],
+	testNamePatterns: selection.flatMap(({ patterns }) => patterns),
+});
 
-assert.equal(
-	result.status,
-	0,
-	result.error?.message ?? "runtime correspondence tests failed",
-);
+tests.on("test:complete", (test) => {
+	if (test.details.type === "test" && test.file && test.name !== test.file)
+		names.get(test.file)?.push(test.name);
+});
+
+tests.on("test:summary", (summary) => {
+	if (summary.file === undefined) result.status = summary.success ? 0 : 1;
+});
+
+for await (const chunk of tap(tests)) {
+	result.stdout += chunk;
+	process.stdout.write(chunk);
+}
+
+assert.equal(result.status, 0, "runtime correspondence tests failed");
+
+for (const { file, patterns } of selection) {
+	const selected = names.get(file) ?? [];
+
+	assert.ok(selected.length > 0, `no correspondence tests selected in ${file}`);
+
+	for (const pattern of patterns)
+		assert.ok(
+			selected.some((name) => pattern.test(name)),
+			`correspondence pattern ${pattern} matched no tests in ${file}`,
+		);
+}
 
 const count = /^# tests (\d+)$/m.exec(result.stdout)?.[1];
 const passed = /^# pass (\d+)$/m.exec(result.stdout)?.[1];
+
+assert.equal(
+	Number(count),
+	[...names.values()].reduce((total, selected) => total + selected.length, 0),
+	"correspondence count must include only registered tests, not file wrappers",
+);
 
 assert.ok(
 	count !== undefined &&
