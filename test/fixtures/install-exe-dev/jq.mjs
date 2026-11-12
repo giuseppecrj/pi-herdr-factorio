@@ -55,4 +55,4 @@ switch (filter) {
 
 console.log(JSON.stringify(result));
 
-if (exitStatus && (result === false || result === null)) process.exitCode = 1;
+if (exitStatus && (result === false || result === null)) process.exit(1);
