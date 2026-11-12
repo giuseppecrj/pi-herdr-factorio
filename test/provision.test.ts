@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { runCli } from "../server/cli.ts";
 import { runPreflight } from "../server/sandbox/preflight.ts";
-import type { PlatformFile } from "../src/platform.ts";
+import type { PlatformFile } from "../src/trust/platform.ts";
 
 const script = readFileSync(
 	new URL("../server/provision.sh", import.meta.url),

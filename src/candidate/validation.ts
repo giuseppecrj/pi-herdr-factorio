@@ -1,24 +1,24 @@
 import { join } from "node:path";
-import { ACCEPTANCE_SUITE_DIR, isAtOrUnder } from "./trust/protected-paths.ts";
+import { ACCEPTANCE_SUITE_DIR, isAtOrUnder } from "../trust/protected-paths.ts";
 import {
 	acceptanceDigestOf,
 	acceptanceEntries,
 	type AcceptanceSuite,
-} from "./accept.ts";
+} from "../contract/acceptance.ts";
 import {
 	type Digest,
 	digestOf,
 	isDigest,
 	type Verdict,
 	verdictPasses,
-} from "./core/run.ts";
+} from "../core/run.ts";
 import {
 	type Publication,
 	type PublishedFile,
 	type TransportCounters,
-} from "./publication.ts";
-import type { Contract } from "./specify.ts";
-import { isGitSha, type GitSha } from "./workflow.ts";
+} from "../publication.ts";
+import type { Contract } from "../specify.ts";
+import { isGitSha, type GitSha } from "../workflow.ts";
 import {
 	arrayOf,
 	countOf,
@@ -29,10 +29,10 @@ import {
 	textOf,
 	textsOf,
 	type JsonValue,
-} from "./core/json.ts";
+} from "../core/json.ts";
 import { type FailureClass, parseFailureClass } from "./diagnosis.ts";
 
-export { REQUIRED_CI_CHECKS } from "./core/run.ts";
+export { REQUIRED_CI_CHECKS } from "../core/run.ts";
 
 export const CI_DEADLINE_MS = 1_200_000;
 export const DISPATCH_SETTLE_MS = 120_000;
@@ -157,7 +157,7 @@ export type ValidationInput = {
 	readonly now: number;
 	readonly wallMs: number;
 	readonly round?: number;
-	readonly generation?: import("./handoff.ts").GenerationIntent;
+	readonly generation?: import("../handoff.ts").GenerationIntent;
 	readonly state: ValidationState | null;
 	readonly save: (state: ValidationState) => Promise<boolean>;
 	readonly dispatchAllowed?: boolean;

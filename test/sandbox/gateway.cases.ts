@@ -65,7 +65,7 @@ import type { JsonValue } from "../../src/core/json.ts";
 import { anthropicTable, modelTable } from "./routes.cases.ts";
 
 import { assertReaderParity } from "./settlement-fixtures.ts";
-import { EXE_DEV_PLATFORM } from "../../src/platform.ts";
+import { EXE_DEV_PLATFORM } from "../../src/trust/platform.ts";
 
 const journals: JournalRecord[][] = [];
 

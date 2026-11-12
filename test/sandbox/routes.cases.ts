@@ -14,7 +14,7 @@ import {
 	type RouteTable,
 } from "../../server/sandbox/routes.ts";
 import type { JsonValue } from "../../src/core/json.ts";
-import { EXE_DEV_PLATFORM } from "../../src/platform.ts";
+import { EXE_DEV_PLATFORM } from "../../src/trust/platform.ts";
 
 export function modelTable(
 	fallback: string | null = "xai/grok-4.6",

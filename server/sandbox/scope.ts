@@ -2,7 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
-import type { Exec } from "../../src/gh.ts";
+import type { Exec } from "../../src/github/exec.ts";
 
 export type ScopeLimits = {
 	readonly memoryMax: string;

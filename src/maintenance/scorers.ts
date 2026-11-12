@@ -1,26 +1,30 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { exclusive, privateDir, regularText } from "./artifacts.ts";
-import { digestOf, type Digest } from "./core/run.ts";
-import { isPinnedGrader, type ScorerConfig, type ModelId } from "./workflow.ts";
+import { exclusive, privateDir, regularText } from "../contract/artifacts.ts";
+import { digestOf, type Digest } from "../core/run.ts";
+import {
+	isPinnedGrader,
+	type ScorerConfig,
+	type ModelId,
+} from "../workflow.ts";
 import {
 	latestScores,
 	parseScores,
 	scoreEventOf,
 	type ScoreEvent,
-} from "./ledger.ts";
-import { objectOf, parseJson, textOf, hasDuplicateKey } from "./core/json.ts";
+} from "../ledger.ts";
+import { objectOf, parseJson, textOf, hasDuplicateKey } from "../core/json.ts";
 import {
 	safeMeasurementText,
 	jsonAnswer,
 	type MeasurementInput,
-} from "./explain.ts";
+} from "../views/explain.ts";
 
 export const FAMILY_NOTE = "context-isolated, same family, not cross-family";
 
 export const SCORER_FILES = [
-	"src/scorers.ts",
+	"src/maintenance/scorers.ts",
 	"src/workflow.ts",
 	".github/factory/WORKFLOW.md",
 ] as const;

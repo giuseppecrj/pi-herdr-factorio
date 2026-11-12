@@ -3,7 +3,7 @@ import type {
 	OwnerFeed,
 	OwnerHeader,
 	DisplayGroup,
-} from "../../src/feed.ts";
+} from "../../src/views/feed.ts";
 import type { HandoffReason } from "../../src/handoff.ts";
 import { STAGE_ORDER } from "../../src/core/stages.ts";
 import { escapeHtml as esc, page } from "./render.ts";

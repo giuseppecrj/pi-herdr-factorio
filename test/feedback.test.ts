@@ -20,13 +20,13 @@ import {
 	FEEDBACK_CARD_BYTES,
 	type FeedbackEvent,
 	type FeedbackId,
-} from "../src/feedback.ts";
+} from "../src/candidate/feedback.ts";
 import {
 	storeFeedbackBatch,
 	observeFeedback,
 	sweepMergedFeedback,
 } from "../server/controller.ts";
-import { GitHubTicketAdapter } from "../src/adapters/github.ts";
+import { GitHubTicketAdapter } from "../src/github/adapter.ts";
 import { digestOf } from "../src/core/run.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
 import {
@@ -36,7 +36,7 @@ import {
 	BOT_LOGIN,
 	httpError,
 } from "./fake-ticket-adapter.ts";
-import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 
 const repo = FAKE_REPO;
 

@@ -6,8 +6,8 @@ import {
 	readAssessmentBytes,
 	validationDir,
 	type ValidationAssessment,
-} from "../../src/validation.ts";
-import { diagnosisDetail } from "../../src/diagnosis.ts";
+} from "../../src/candidate/validation.ts";
+import { diagnosisDetail } from "../../src/candidate/diagnosis.ts";
 import { viewerClaim } from "./claim.ts";
 import { readStageReceipt } from "../sandbox/receipts.ts";
 import {
@@ -23,8 +23,8 @@ import {
 import { childUsageOf } from "../sandbox/settle.ts";
 import { isDigest, runIdOf } from "../../src/core/run.ts";
 import { isRepoSlug, isGitSha } from "../../src/workflow.ts";
-import { isLogin } from "../../src/adapters/github.ts";
-import { parseMarker } from "../../src/markers.ts";
+import { isLogin } from "../../src/github/adapter.ts";
+import { parseMarker } from "../../src/trust/markers.ts";
 import {
 	STAGE_ORDER,
 	MODEL_STAGES,
@@ -42,7 +42,7 @@ import {
 	type Certification,
 	type CandidateExecution,
 } from "../../src/handoff.ts";
-import { reviewDir, type ReviewReceipt } from "../../src/review.ts";
+import { reviewDir, type ReviewReceipt } from "../../src/candidate/review.ts";
 import { blocksReview, type Verdict } from "../../src/core/run.ts";
 
 export const markerHistoryGap =

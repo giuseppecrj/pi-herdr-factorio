@@ -1,13 +1,13 @@
-import type { HandoffReason, GenerationRef } from "./handoff.ts";
+import type { HandoffReason, GenerationRef } from "../handoff.ts";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
-import { regularText } from "./artifacts.ts";
-import type { GitHubFailure } from "./adapters/github.ts";
-import type { JsonValue } from "./core/json.ts";
+import { regularText } from "../contract/artifacts.ts";
+import type { GitHubFailure } from "../github/adapter.ts";
+import type { JsonValue } from "../core/json.ts";
 import { posix } from "node:path";
-import { digestOf, isDigest, type Digest } from "./core/run.ts";
-import { isGitSha, type GitSha, type RepoSlug } from "./workflow.ts";
-import { ACCEPTANCE_SUITE_DIR, isAtOrUnder } from "./trust/protected-paths.ts";
+import { digestOf, isDigest, type Digest } from "../core/run.ts";
+import { isGitSha, type GitSha, type RepoSlug } from "../workflow.ts";
+import { ACCEPTANCE_SUITE_DIR, isAtOrUnder } from "../trust/protected-paths.ts";
 
 export type FeedbackId =
 	| `github:${RepoSlug}:issue-comment:${number}`

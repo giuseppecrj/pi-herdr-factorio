@@ -42,7 +42,7 @@ import { listScopesArgv } from "../server/sandbox/scope.ts";
 import { startGatewayProcess } from "../server/sandbox/gateway-client.ts";
 import { manifestDigest } from "../server/sandbox/manifest.ts";
 import { arrayOf, objectOf, parseJson } from "../src/core/json.ts";
-import { fileAdmissionStore, snapshotDigest } from "../src/admission.ts";
+import { fileAdmissionStore, snapshotDigest } from "../src/trust/admission.ts";
 import {
 	CadenceRunner,
 	CADENCE_RETAIN_EXECUTIONS,
@@ -69,15 +69,15 @@ import {
 	type CadenceInput,
 	type CadenceResult,
 	type CadenceTick,
-} from "../src/cadence.ts";
-import { cadenceMarker } from "../src/markers.ts";
+} from "../src/maintenance/cadence.ts";
+import { cadenceMarker } from "../src/trust/markers.ts";
 import {
 	enqueueScore,
 	unreviewedFailures,
 	reflectScores,
-} from "../src/scorers.ts";
+} from "../src/maintenance/scorers.ts";
 import { parseLedger, type ScoreEvent } from "../src/ledger.ts";
-import { measurementPrimary } from "../src/metrics.ts";
+import { measurementPrimary } from "../src/views/metrics.ts";
 import { Orchestrator } from "../src/orchestrator.ts";
 import { digestOf } from "../src/core/run.ts";
 import {
@@ -89,7 +89,7 @@ import {
 	type Exec,
 	type ExecResult,
 } from "../src/workflow.ts";
-import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 import { controllerEnv, noPlatformFile } from "./helpers.ts";
 import { nativeUserScope } from "./native-scope.ts";
 
@@ -3572,7 +3572,7 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 
 	const mixed = {
 		...finding(),
-		title: "src/cadence.ts (policy) \\ @owner #12 GH-34",
+		title: "src/maintenance/cadence.ts (policy) \\ @owner #12 GH-34",
 		evidence: [
 			{ path: "src/example.ts", start: 1, end: 2 },
 			{ path: "src/example.ts", start: 1, end: 50 },
@@ -3590,7 +3590,10 @@ it("native cadence --once dedup demo: real Pi/RPC, bwrap, user scope, gateway an
 	assert.equal((github.issues[2]!.body.match(/\/blob\//g) ?? []).length, 1);
 	assert.doesNotMatch(github.issues[2]!.body, /L50|missing\.ts/);
 	assert.doesNotMatch(github.issues[2]!.title, /\\|@owner|#12|GH-34/);
-	assert.match(github.issues[2]!.title, /src\/cadence\.ts \(policy\)/);
+	assert.match(
+		github.issues[2]!.title,
+		/src\/maintenance\/cadence\.ts \(policy\)/,
+	);
 
 	const invalidState = join(root, "invalid");
 	mkdirSync(invalidState, { mode: 0o700 });

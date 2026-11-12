@@ -31,11 +31,11 @@ import { startViewer } from "../server/viewer.ts";
 import { collectOwnerMetrics, runCli } from "../server/cli.ts";
 import { parseLedger, ledgerRow } from "../src/ledger.ts";
 import { gitObjectSha } from "../src/publication.ts";
-import type { InterventionRead } from "../src/metrics.ts";
+import type { InterventionRead } from "../src/views/metrics.ts";
 import type { JsonValue } from "../src/core/json.ts";
-import type { FeedEntry } from "../src/feed.ts";
+import type { FeedEntry } from "../src/views/feed.ts";
 import { readOwnerFeed, readOwnerRun } from "../server/cli/owner-feed.ts";
-import { fileAdmissionStore } from "../src/admission.ts";
+import { fileAdmissionStore } from "../src/trust/admission.ts";
 import {
 	Orchestrator,
 	type TickReport,
@@ -57,7 +57,7 @@ import {
 	repo,
 	save,
 } from "./fixtures/owner-feed/state.ts";
-import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 import { noPlatformFile } from "./helpers.ts";
 
 async function state<T>(body: (root: string) => Promise<T>) {

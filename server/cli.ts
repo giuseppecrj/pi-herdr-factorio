@@ -8,12 +8,12 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import manifest from "../package.json" with { type: "json" };
-import { readAttention, type AttentionRead } from "../src/attention.ts";
+import { readAttention, type AttentionRead } from "../src/views/attention.ts";
 import {
 	type AdmissionReceipt,
 	admitTicket,
 	fileAdmissionStore,
-} from "../src/admission.ts";
+} from "../src/trust/admission.ts";
 import {
 	type HistoricalRepositories,
 	measuredRepositories,
@@ -25,8 +25,8 @@ import {
 	readPlatformFile,
 	resolvePlatform,
 	soleRepository,
-} from "../src/platform.ts";
-import { GitHubTicketAdapter } from "../src/adapters/github.ts";
+} from "../src/trust/platform.ts";
+import { GitHubTicketAdapter } from "../src/github/adapter.ts";
 import {
 	type Clock,
 	checkIdentity,
@@ -81,7 +81,7 @@ import {
 	type SocketLockState,
 } from "./controller/state.ts";
 import { readOwnerFeed } from "./cli/owner-feed.ts";
-import { isCadenceJob } from "../src/cadence.ts";
+import { isCadenceJob } from "../src/maintenance/cadence.ts";
 import type { CadenceJob } from "../src/workflow.ts";
 import { GitHubPublicationApi } from "../src/publication.ts";
 import { sandboxExecutor } from "./sandbox.ts";
@@ -109,7 +109,7 @@ import {
 	readReceiptDigests,
 	type DefectIssue,
 	type DefectRead,
-} from "../src/metrics.ts";
+} from "../src/views/metrics.ts";
 
 import {
 	checkReplay,
@@ -121,7 +121,7 @@ import {
 	readReplayRecord,
 	REPLAY_CORPUS,
 	REPLAY_RUN_CAP,
-} from "../src/replay.ts";
+} from "../src/maintenance/replay.ts";
 import { checkReplayBundles } from "./cli/replay.ts";
 
 export const USAGE = `Usage:

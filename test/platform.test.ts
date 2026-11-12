@@ -30,9 +30,13 @@ import {
 	type Route,
 	type RouteTable,
 } from "../server/sandbox/routes.ts";
-import type { CommentEdit, IssueComment } from "../src/adapters/github.ts";
-import { GitHubTicketAdapter } from "../src/adapters/github.ts";
-import { formatMarker, type Marker, markerLedger } from "../src/markers.ts";
+import type { CommentEdit, IssueComment } from "../src/github/adapter.ts";
+import { GitHubTicketAdapter } from "../src/github/adapter.ts";
+import {
+	formatMarker,
+	type Marker,
+	markerLedger,
+} from "../src/trust/markers.ts";
 import { checkIdentity, type TickReport } from "../src/orchestrator.ts";
 import {
 	currentRepository,
@@ -47,8 +51,8 @@ import {
 	platformSummary,
 	readPlatformFile,
 	resolvePlatform,
-} from "../src/platform.ts";
-import { reserveReplay } from "../src/replay.ts";
+} from "../src/trust/platform.ts";
+import { reserveReplay } from "../src/maintenance/replay.ts";
 import { digestOf, runIdOf } from "../src/core/run.ts";
 import type { JsonValue } from "../src/core/json.ts";
 import {

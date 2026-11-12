@@ -2,7 +2,7 @@
 
 OwnerFeed is the read-only projection of the factory's local state that an owner client reads. The Factory tab in Shep v3 is that client (Shep R25, decided on [#719](https://github.com/nublai/pi-herdr-factorio/issues/719)). The Shep bridge on the factory VM reads the feed locally and sends every push. The controller never calls `apns.int` and never talks to a phone.
 
-This page is the contract for that bridge. It answers the five questions Shep asked on #719 and lists every field. The fields come from `src/feed.ts` and `src/attention.ts`. Where the code states no rule, the page says so and labels the rule a **proposal**.
+This page is the contract for that bridge. It answers the five questions Shep asked on #719 and lists every field. The fields come from `src/views/feed.ts` and `src/views/attention.ts`. Where the code states no rule, the page says so and labels the rule a **proposal**.
 
 | Shep's question on #719 | Section |
 | --- | --- |
@@ -16,7 +16,7 @@ The push rule is in [Push rule for the bridge](#push-rule-for-the-bridge).
 
 ## Read the feed
 
-Two sources return the same projection. Both call `readOwnerFeed` (`server/cli/owner-feed.ts:36`), which reads the controller state and receipts and passes them to the projection in `src/feed.ts`. Neither makes a GitHub or model call.
+Two sources return the same projection. Both call `readOwnerFeed` (`server/cli/owner-feed.ts:36`), which reads the controller state and receipts and passes them to the projection in `src/views/feed.ts`. Neither makes a GitHub or model call.
 
 ```bash
 node server/cli.ts owner-feed --json --state-dir "$STATE" [--repo <owner/name>]
@@ -40,13 +40,13 @@ The VM figure comes from the independent verifier's run of ten CLI reads on the 
 
 **Allowed read rate (proposal).** The code enforces no rate. Read at most once every 5 seconds while the app is open and once every 60 seconds in the background. Keep one read in flight. On the VM, one CLI read takes about 620 ms of wall time, so one read every 5 seconds uses about 12% of each 5-second slot. One read every 60 seconds uses about 1%. The proposed rates still hold at that cost.
 
-The bridge must run as the Unix user that owns the state directory. Most of the feed's file reads ignore a file that is a symlink, is owned by another user, or is readable by group or others. Those readers are `localJson` (`src/feed.ts:102`, which checks every path part below the state directory) and `privatePath` and `privateJson` (`src/attention.ts:131` and `src/attention.ts:145`, which check the state directory, `claims/` and each file they open). These readers do not check:
+The bridge must run as the Unix user that owns the state directory. Most of the feed's file reads ignore a file that is a symlink, is owned by another user, or is readable by group or others. Those readers are `localJson` (`src/views/feed.ts:102`, which checks every path part below the state directory) and `privatePath` and `privateJson` (`src/views/attention.ts:131` and `src/views/attention.ts:145`, which check the state directory, `claims/` and each file they open). These readers do not check:
 
 - `status.json` through `readStatus` (`server/controller/state.ts:147`), which supplies the thresholds, the unreadable list and `controller.lastTick`. It follows symlinks and ignores owner and mode.
-- The admission snapshot that supplies `title` (`src/admission.ts:490` to `src/admission.ts:513`). It uses a plain `readFile`.
-- The local switch (`src/admission.ts:524`). It checks that the state directory belongs to the user and is not group or other writable, and it does not check the `disabled` file's owner.
+- The admission snapshot that supplies `title` (`src/trust/admission.ts:490` to `src/trust/admission.ts:513`). It uses a plain `readFile`.
+- The local switch (`src/trust/admission.ts:524`). It checks that the state directory belongs to the user and is not group or other writable, and it does not check the `disabled` file's owner.
 - The controller lock, which sets `controller.state`. `readOwnerHeader` in `server/cli/owner-feed.ts` reads it through `readLock` (`server/controller/state.ts:114`).
-- The stored verdict (`readStoredVerdict`, `server/controller/state.ts:138`, through `regularBytes`, `src/artifacts.ts:232`). It rejects a symlink and a group- or other-accessible file, and does not check the owner.
+- The stored verdict (`readStoredVerdict`, `server/controller/state.ts:138`, through `regularBytes`, `src/contract/artifacts.ts:232`). It rejects a symlink and a group- or other-accessible file, and does not check the owner.
 
 A bridge running as another user usually gets an unavailable feed, not an error, because the state directory itself fails the check. This PR does not harden the unchecked readers.
 
@@ -56,7 +56,7 @@ An unreadable state directory is a successful read with no data. The CLI exits 0
 
 ## Fields
 
-`version` is the number `1` (`src/feed.ts:55`). The type is `OwnerFeed` at `src/feed.ts:54`. Every field below is always present. Nullable fields are `null`, never absent.
+`version` is the number `1` (`src/views/feed.ts:55`). The type is `OwnerFeed` at `src/views/feed.ts:54`. Every field below is always present. Nullable fields are `null`, never absent.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
@@ -72,7 +72,7 @@ An unreadable state directory is a successful read with no data. The CLI exits 0
 | `durableUsage` | object | `kind` is `exact`, `lower_bound`, `uncertain` or `unavailable`. `total` is a number or null. |
 | `unreadable` | array | `{issue, issueUrl, reason}` for issues whose run history is corrupt. These issues have no entry. |
 | `gaps` | array of string | Codes for evidence the read could not use. |
-| `metrics` | object | See the next table (`src/feed.ts:72`). |
+| `metrics` | object | See the next table (`src/views/feed.ts:72`). |
 
 `metrics` has these members. When `status` is `Pending`, `share`, `numerator`, `denominator` and `tokensPerCleanLanding` are `null`.
 
@@ -86,7 +86,7 @@ An unreadable state directory is a successful read with no data. The CLI exits 0
 | `denominator` | number or null | The share's denominator. |
 | `tokensPerCleanLanding` | number or null | Tokens per clean landing. |
 
-An entry (`FeedEntry`, `src/feed.ts:43`) has these fields.
+An entry (`FeedEntry`, `src/views/feed.ts:43`) has these fields.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
@@ -111,7 +111,7 @@ An entry (`FeedEntry`, `src/feed.ts:43`) has these fields.
 | `ci` | string | `Passed`, `Failed` or `Pending`. |
 | `failure` | object or null | `{stage, class, reason}` from the ledger. |
 | `notProven` | array of string | Fixed sentences about what checks and review did not prove. |
-| `steps` | array | One `FeedStep` (`src/feed.ts:34`) per model stage that left a receipt. |
+| `steps` | array | One `FeedStep` (`src/views/feed.ts:34`) per model stage that left a receipt. |
 
 A `FeedStep` has these members.
 
@@ -124,13 +124,13 @@ A `FeedStep` has these members.
 
 ### Attention kinds and groups
 
-The kinds are `question_asked`, `question_answered`, `spec_review`, `pr_review`, `blocked`, `budget` and `failed` (`src/attention.ts:33`). `spec_review` is never emitted. `readAttention` reports it as `not_enabled_in_v1` (`src/attention.ts:672`), so its count is always 0 and no capture exists for it.
+The kinds are `question_asked`, `question_answered`, `spec_review`, `pr_review`, `blocked`, `budget` and `failed` (`src/views/attention.ts:33`). `spec_review` is never emitted. `readAttention` reports it as `not_enabled_in_v1` (`src/views/attention.ts:672`), so its count is always 0 and no capture exists for it.
 
-`group` is derived separately from `kind` (`src/feed.ts:407`). A finished run is `done`. A `failed` kind is `failed`. A run with no kind, a `question_answered` kind, or a published pull request being refreshed is `working`. Everything else is `needs_you`. `kind` and `group` differ in two places. `question_answered` has group `working`, because the factory continues on its own. A published pull request being refreshed keeps kind `blocked` and has group `working`, so `counts.blocked` can exceed the `needs_you` entries.
+`group` is derived separately from `kind` (`src/views/feed.ts:407`). A finished run is `done`. A `failed` kind is `failed`. A run with no kind, a `question_answered` kind, or a published pull request being refreshed is `working`. Everything else is `needs_you`. `kind` and `group` differ in two places. `question_answered` has group `working`, because the factory continues on its own. A published pull request being refreshed keeps kind `blocked` and has group `working`, so `counts.blocked` can exceed the `needs_you` entries.
 
 ## Change rules
 
-The code states no rule for evolving the feed. `version` is a literal `1` (`src/feed.ts:55`). The golden test compares the whole feed with `test/fixtures/owner-feed/feed-v1.json` using `deepEqual` (`test/feed.test.ts`, first test), so any added or removed field fails it until a person edits the fixture. That makes a change visible. It does not say which changes are allowed.
+The code states no rule for evolving the feed. `version` is a literal `1` (`src/views/feed.ts:55`). The golden test compares the whole feed with `test/fixtures/owner-feed/feed-v1.json` using `deepEqual` (`test/feed.test.ts`, first test), so any added or removed field fails it until a person edits the fixture. That makes a change visible. It does not say which changes are allowed.
 
 **Proposal.** This rule matches how the feed is built today.
 
@@ -158,21 +158,21 @@ No option emits two versions. A v2 replaces v1 on the CLI and the route, unless 
 
 Key a run on `repo` and `issue`. Do not key on `runId`.
 
-`runId` is a digest of the repository, the issue number and the admission event (`runIdOf`, `src/core/run.ts:58`, checked at `src/attention.ts:173`). A new admission event gives a new `runId` for the same issue. An owner's answer to a question starts one, and its `links/<runId>.json` file names the previous run (`src/attention.ts:556`). A later admission event also replaces a failed or budget-stopped run, as [Viewer](viewer.md) describes. `eventId` is that event as a decimal string.
+`runId` is a digest of the repository, the issue number and the admission event (`runIdOf`, `src/core/run.ts:58`, checked at `src/views/attention.ts:173`). A new admission event gives a new `runId` for the same issue. An owner's answer to a question starts one, and its `links/<runId>.json` file names the previous run (`src/views/attention.ts:556`). A later admission event also replaces a failed or budget-stopped run, as [Viewer](viewer.md) describes. `eventId` is that event as a decimal string.
 
-The feed keeps one run per issue. When an issue has several claims, `readAttention` keeps the one with the greatest `eventId`, then the greatest sequence number (`src/attention.ts:493` to `src/attention.ts:525`). An older run disappears from `entries` when a newer one starts.
+The feed keeps one run per issue. When an issue has several claims, `readAttention` keeps the one with the greatest `eventId`, then the greatest sequence number (`src/views/attention.ts:493` to `src/views/attention.ts:525`). An older run disappears from `entries` when a newer one starts.
 
 Use these keys:
 
 - **Collapse key.** `repo` plus `issue`. One key per issue means a run that moves from `question_asked` to `question_answered`, or fails and restarts, replaces its earlier notification.
-- **Change test.** Compare the decision fingerprint, the three fields `kind`, `runId` and `reason`, between two reads of the same key. `reason` carries the hold reason (`src/attention.ts:632`). Two holds on one run, such as `disabled` and then `run_tokens`, keep the same `kind`, `group` and `runId` and differ only in `reason`. `test/feed.test.ts` has a case that changes only the `claim_unverified` reason of one run between two reads.
-- **Tap target.** `prUrl` when it is not null, otherwise `issueUrl`. The CLI's text report picks the same way (`src/attention.ts:693`).
+- **Change test.** Compare the decision fingerprint, the three fields `kind`, `runId` and `reason`, between two reads of the same key. `reason` carries the hold reason (`src/views/attention.ts:632`). Two holds on one run, such as `disabled` and then `run_tokens`, keep the same `kind`, `group` and `runId` and differ only in `reason`. `test/feed.test.ts` has a case that changes only the `claim_unverified` reason of one run between two reads.
+- **Tap target.** `prUrl` when it is not null, otherwise `issueUrl`. The CLI's text report picks the same way (`src/views/attention.ts:693`).
 
 An issue in `unreadable` has no entry. Its key is still `repo` plus `issue`.
 
 ### Known limit, one issue can appear twice
 
-Reproduced on 2026-11-10. An older run of an issue can still be listed in `status.json` under `unverifiedClaims`. When the issue also has a newer run, the feed has two entries for the issue. The second has `kind: "blocked"`, `eventId: ""`, `title: "Title unavailable"` and `reason: "claim_unverified:issue"`. It also adds one to `counts.blocked` (`src/attention.ts:655`, `src/feed.ts:572` to `src/feed.ts:594`). The bridge must apply the collapse key to both entries. The empty-`eventId` entry can be the newer run. `test/attention.test.ts:623` builds that case, where the held run has `eventId` 2 and the listed claim is its predecessor. The feed discards the hold's event id (`src/feed.ts:572` to `src/feed.ts:581`), so v1 cannot tell which of the two entries is newer. Do not select the latest run. Keep the attention signal instead. If either entry for a key has `group: "needs_you"`, the key needs the owner. Take the fingerprint of a key with two entries as the set of fingerprints of its `needs_you` entries. This is a product defect, reported and not fixed.
+Reproduced on 2026-11-10. An older run of an issue can still be listed in `status.json` under `unverifiedClaims`. When the issue also has a newer run, the feed has two entries for the issue. The second has `kind: "blocked"`, `eventId: ""`, `title: "Title unavailable"` and `reason: "claim_unverified:issue"`. It also adds one to `counts.blocked` (`src/views/attention.ts:655`, `src/views/feed.ts:572` to `src/views/feed.ts:594`). The bridge must apply the collapse key to both entries. The empty-`eventId` entry can be the newer run. `test/attention.test.ts:623` builds that case, where the held run has `eventId` 2 and the listed claim is its predecessor. The feed discards the hold's event id (`src/views/feed.ts:572` to `src/views/feed.ts:581`), so v1 cannot tell which of the two entries is newer. Do not select the latest run. Keep the attention signal instead. If either entry for a key has `group: "needs_you"`, the key needs the owner. Take the fingerprint of a key with two entries as the set of fingerprints of its `needs_you` entries. This is a product defect, reported and not fixed.
 
 ## Actions
 
@@ -180,7 +180,7 @@ The app is read-only. Every action opens GitHub through `issueUrl` or `prUrl`. S
 
 The factory has one non-GitHub owner action, the local hold.
 
-- **The switch.** The file `$STATE/disabled` (`LOCAL_DISABLE_FILE`, `src/policy.ts:66`). While it exists, the controller admits no new ticket. It does not cancel work, reset a budget or restart a finished run. The feed shows it as `controller.localSwitch: "disabled"` (`src/admission.ts:524`).
+- **The switch.** The file `$STATE/disabled` (`LOCAL_DISABLE_FILE`, `src/trust/policy.ts:66`). While it exists, the controller admits no new ticket. It does not cancel work, reset a budget or restart a finished run. The feed shows it as `controller.localSwitch: "disabled"` (`src/trust/admission.ts:524`).
 - **The viewer's hold form.** `POST /hold` (`server/viewer.ts:120`) creates or removes that file. By default it needs the exact loopback `Host`, a matching `Origin`, a form content type, and a token that changes each time the viewer starts and appears only in the dashboard HTML. A viewer started with `--allowed-host` also accepts that one host, with a matching `https://` `Origin` (`server/viewer.ts:99` to `server/viewer.ts:110`). The form has two fields, `token` and `hold=on|off`.
 
 The CLI has no hold command. A phone action that changes the hold, or does anything else besides opening GitHub, needs its own design first. [Viewer](viewer.md) has the hold form's guards.
@@ -191,13 +191,13 @@ Only `title` carries free text from outside the factory, and `plainTitle` is its
 
 | Field | Where the text comes from | Bound today |
 | --- | --- | --- |
-| `entries[].title` | The saved admission snapshot of the issue, written by the issue author. | `plainTitle` (`src/attention.ts:18`) replaces control characters (code points below 32 and 127 to 159) and bidirectional marks with a space, then keeps the first 120 code points, which can be 480 UTF-8 bytes. It does not escape HTML, strip Markdown, or remove other invisible characters such as the zero-width space. It returns `Title unavailable` when the snapshot is missing. |
-| `entries[].reason` | The controller. | A closed vocabulary. The `HandoffReason` values that `wireReason` checks (`src/handoff.ts:3705`), `candidate_book_unavailable`, `feedback_overflow`, `working_generation`, `claim_unverified:<why>[:<failure>]` and `feedback_unavailable:<reason>[:<failure>]`. Each part of the last two comes from a fixed list (`src/attention.ts:368`, `src/attention.ts:426`). |
+| `entries[].title` | The saved admission snapshot of the issue, written by the issue author. | `plainTitle` (`src/views/attention.ts:18`) replaces control characters (code points below 32 and 127 to 159) and bidirectional marks with a space, then keeps the first 120 code points, which can be 480 UTF-8 bytes. It does not escape HTML, strip Markdown, or remove other invisible characters such as the zero-width space. It returns `Title unavailable` when the snapshot is missing. |
+| `entries[].reason` | The controller. | A closed vocabulary. The `HandoffReason` values that `wireReason` checks (`src/handoff.ts:3705`), `candidate_book_unavailable`, `feedback_overflow`, `working_generation`, `claim_unverified:<why>[:<failure>]` and `feedback_unavailable:<reason>[:<failure>]`. Each part of the last two comes from a fixed list (`src/views/attention.ts:368`, `src/views/attention.ts:426`). |
 | `entries[].failure` | The ledger row or terminal record. | `stage` and `class` are fixed lists. `reason` must match `^[a-z][a-z0-9_]{0,63}$` (`src/ledger.ts:504`, `src/ledger.ts:693`). |
-| `entries[].notProven` | Fixed sentences from `renderLimitation` (`src/handoff.ts:4155`), and one fallback sentence (`src/feed.ts:393`). | Criterion and scenario IDs appear only when they match `A<n>` or `S<n>`. A judgment outcome appears only as a value of `JUDGMENT_OUTCOMES` (`src/review.ts:326`). Criterion text, scenario text and review reasons never appear. |
+| `entries[].notProven` | Fixed sentences from `renderLimitation` (`src/handoff.ts:4155`), and one fallback sentence (`src/views/feed.ts:393`). | Criterion and scenario IDs appear only when they match `A<n>` or `S<n>`. A judgment outcome appears only as a value of `JUDGMENT_OUTCOMES` (`src/candidate/review.ts:326`). Criterion text, scenario text and review reasons never appear. |
 | `gaps[]` | The controller. | Fixed codes (`unrecognized_claim`, `state_unavailable`), or a code with an issue number or a 12-character run prefix (`invalid_claim:<12 characters>`, `ambiguous_issue:<n>`, `candidate_book_unavailable:<12 characters>`, `invalid_link:<12 characters>`). |
-| `unreadable[].reason` | The controller. | One constant sentence (`src/feed.ts:539`). |
-| `entries[].steps[].stage` | A stage receipt the controller wrote. | Any string. The receipt's directory name is checked, the `stage` field inside it is not (`src/feed.ts:220`). |
+| `unreadable[].reason` | The controller. | One constant sentence (`src/views/feed.ts:539`). |
+| `entries[].steps[].stage` | A stage receipt the controller wrote. | Any string. The receipt's directory name is checked, the `stage` field inside it is not (`src/views/feed.ts:220`). |
 | `controller.lastTick`, `metrics.computedAt` | Files the controller wrote. | Any string. |
 
 Render every string in the feed as plain text. A client that shows `title` as Markdown or HTML will show markup from the issue.
@@ -207,8 +207,8 @@ Render every string in the feed as plain text. A client that shows `title` as Ma
 The bridge builds pushes from changes between two feed reads. The controller sends nothing. There are two kinds of push, the needs-you alert and a quieter failed alert. The owner decided on 2026-11-10 that the Factory tab sends both, the way Shep's Chats sends a separate "finished" alert.
 
 - The first successful read seeds the bridge's state and sends no push of either kind.
-- A needs-you alert fires only for a new owner decision. The feed marks an entry that waits on the owner with `group: "needs_you"` (`src/feed.ts:407`). A finished run has group `done` and never pushes.
-- A failed alert fires when a run newly fails. The feed marks a failed run with `group: "failed"` (`src/feed.ts:407`). Shep sends it at a lower interruption level than a needs-you alert.
+- A needs-you alert fires only for a new owner decision. The feed marks an entry that waits on the owner with `group: "needs_you"` (`src/views/feed.ts:407`). A finished run has group `done` and never pushes.
+- A failed alert fires when a run newly fails. The feed marks a failed run with `group: "failed"` (`src/views/feed.ts:407`). Shep sends it at a lower interruption level than a needs-you alert.
 - Nothing pushes for a run the owner is viewing in the app.
 - There is one collapse key per [stable key](#identify-a-run).
 - The title is at most 64 bytes and the body at most 256 bytes. Both count UTF-8 bytes and are trimmed on a character boundary.

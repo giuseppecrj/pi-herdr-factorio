@@ -223,7 +223,7 @@ All `provenance.kind: verification` rows are excluded. Legacy contexts carrying
 a verification manifest are excluded too. Other `legacy_import` rows remain
 included and appear under `legacyRuns`.
 
-`EXCLUDED_RUNS` in `src/metrics.ts` is append-only. These verification runs were
+`EXCLUDED_RUNS` in `src/views/metrics.ts` is append-only. These verification runs were
 written with production provenance:
 
 | Run ID | Reason |
@@ -266,7 +266,7 @@ The version-1 report contains:
 
 ## Deferred-work signals
 
-The coordinator defaults are centralized in `METRIC_POLICY` in `src/metrics.ts`.
+The coordinator defaults are centralized in `METRIC_POLICY` in `src/views/metrics.ts`.
 The seven-day window and 0.10 revisit thresholds are reviewed constants, not
 `WORKFLOW.md` settings. The owner approved these defaults for F12a.
 

@@ -24,7 +24,7 @@ import {
 	type RouteTable,
 } from "../../server/sandbox/routes.ts";
 import { modelTable } from "./routes.cases.ts";
-import { EXE_DEV_PLATFORM } from "../../src/platform.ts";
+import { EXE_DEV_PLATFORM } from "../../src/trust/platform.ts";
 
 export const ECHO_SECRET = "fixture-secret-7Hq2-not-real";
 

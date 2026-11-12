@@ -27,8 +27,8 @@ import {
 	failedVisibleChecks,
 	type FailureClass,
 	type VisibleCheck,
-} from "./diagnosis.ts";
-import type { TerminalStatus } from "./markers.ts";
+} from "./candidate/diagnosis.ts";
+import type { TerminalStatus } from "./trust/markers.ts";
 import { STAGE_ORDER, type Stage } from "./core/stages.ts";
 import {
 	isGitSha,
@@ -447,7 +447,7 @@ const provenance = tagged({
 
 /**
  * Why a run stopped, by class. `budget` reasons are the exhausted cap; the
- * diagnosis classes carry the `src/diagnosis.ts` reason; `base` carries the
+ * diagnosis classes carry the `src/candidate/diagnosis.ts` reason; `base` carries the
  * base refusal reason. Version 1 rows never hold the four later causes.
  */
 export const FAILURE_CLASSES = [

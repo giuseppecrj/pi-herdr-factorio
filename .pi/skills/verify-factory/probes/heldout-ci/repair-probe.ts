@@ -14,13 +14,16 @@ import {
 	fileRunFiles,
 	ghTarball,
 } from "../../../../../server/controller.ts";
-import { prepareRepairTree, readPatch } from "../../../../../src/build.ts";
-import { acceptanceEntries } from "../../../../../src/accept.ts";
+import {
+	prepareRepairTree,
+	readPatch,
+} from "../../../../../src/candidate/build.ts";
+import { acceptanceEntries } from "../../../../../src/contract/acceptance.ts";
 import { digestOf, isDigest } from "../../../../../src/core/run.ts";
 import {
 	readPlatformFile,
 	resolvePlatform,
-} from "../../../../../src/platform.ts";
+} from "../../../../../src/trust/platform.ts";
 import {
 	fieldOf,
 	objectOf,

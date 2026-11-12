@@ -673,7 +673,7 @@ One JSON object per request, one line, written when the request finishes (sectio
 
 ### 6.3 Untrusted text never enters factory output
 
-F04 set the rule that errors, warnings and status carry only text the factory builds itself, and never quote `gh` output, YAML errors, a key or value from `WORKFLOW.md`, or an argument **[E `docs/operations/factory-cli.md` line 14]**. Markers follow it too **[E `src/markers.ts` lines 47-49]**. The gateway keeps it in four ways **[D]**.
+F04 set the rule that errors, warnings and status carry only text the factory builds itself, and never quote `gh` output, YAML errors, a key or value from `WORKFLOW.md`, or an argument **[E `docs/operations/factory-cli.md` line 14]**. Markers follow it too **[E `src/trust/markers.ts` lines 47-49]**. The gateway keeps it in four ways **[D]**.
 
 - **Receipts, markers, `/factory status`, GitHub comments and the ledger** get only numbers, enum codes, built-in route ids, `declared:<n>` for declared routes, and host-side credential ids. Never a path, header, body, upstream text or a `WORKFLOW.md` string.
 - **The agent** sees only the fixed deny body and the code. Unlike `srt`, the gateway does not feed a violations block back to the model **[E `research/prior-art.md` §1.4]**.

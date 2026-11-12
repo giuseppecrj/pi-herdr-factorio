@@ -26,23 +26,23 @@ import {
 	privateDir,
 	regularText,
 	regularBytes,
-} from "./artifacts.ts";
-import { checkChangedPaths } from "./policy.ts";
+} from "../contract/artifacts.ts";
+import { checkChangedPaths } from "../trust/policy.ts";
 import {
 	CONTROL_PLANE_DIR,
 	ACCEPTANCE_SUITE_DIR,
 	isAtOrUnder,
 	FEEDBACK_FILE,
-} from "./trust/protected-paths.ts";
+} from "../trust/protected-paths.ts";
 import {
 	assessVisibleChecks,
 	type CheckAssessment,
 	type CheckEnvironment,
 } from "./diagnosis.ts";
-import { digestOf, isDigest, type Digest } from "./core/run.ts";
-import { renderInlined, type Contract, type InlinedFile } from "./specify.ts";
-import type { Guidance } from "./workflow.ts";
-import { arrayOf, fieldOf, objectOf, parseJson, textOf } from "./core/json.ts";
+import { digestOf, isDigest, type Digest } from "../core/run.ts";
+import { renderInlined, type Contract, type InlinedFile } from "../specify.ts";
+import type { Guidance } from "../workflow.ts";
+import { arrayOf, fieldOf, objectOf, parseJson, textOf } from "../core/json.ts";
 
 export const BUILD_TOOLS = [
 	"read",

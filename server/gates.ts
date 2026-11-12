@@ -18,14 +18,17 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { scanSource, type Signal } from "../.github/factory/gates/scan.ts";
-import { readStoredContract } from "../src/artifacts.ts";
+import { readStoredContract } from "../src/contract/artifacts.ts";
 import {
 	CONTROL_PLANE_PREFIX,
 	ACCEPTANCE_SUITE_DIR,
 	ACCEPTANCE_SUITE_PREFIX,
 } from "../src/trust/protected-paths.ts";
 import { isDigest, digestOf } from "../src/core/run.ts";
-import { acceptanceEntries, type AcceptanceSuite } from "../src/accept.ts";
+import {
+	acceptanceEntries,
+	type AcceptanceSuite,
+} from "../src/contract/acceptance.ts";
 import {
 	BASE_PROTOCOL_VERSION,
 	runtimeCause,
@@ -40,7 +43,7 @@ import {
 	type PrivateExecution,
 	type TreeReplay,
 	type TestFailure,
-} from "../src/diagnosis.ts";
+} from "../src/candidate/diagnosis.ts";
 import type { Contract } from "../src/specify.ts";
 import {
 	DEFAULT_SCOPE_LIMITS,

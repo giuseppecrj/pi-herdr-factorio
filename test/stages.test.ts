@@ -8,7 +8,7 @@ import {
 	MAX_REPAIR_ROUNDS,
 	nextStage,
 	STAGE_PROFILES,
-} from "../src/stages.ts";
+} from "../src/candidate/stages.ts";
 import {
 	acceptedEvent,
 	acceptanceDigest,

@@ -1,6 +1,6 @@
 # Platform profile
 
-The factory runs on one host platform at a time. A platform is a validated, immutable `PlatformProfile` from `src/platform.ts`. It holds every value that differs between hosts: the model integration, the edge address, the model base paths, the forbidden upstream domains, the controller's GitHub identity, `GH_HOST`, the repository allowlist and the Anthropic stage positions. With nothing configured the profile is `exe-dev`, and behaviour is what it was before profiles existed.
+The factory runs on one host platform at a time. A platform is a validated, immutable `PlatformProfile` from `src/trust/platform.ts`. It holds every value that differs between hosts: the model integration, the edge address, the model base paths, the forbidden upstream domains, the controller's GitHub identity, `GH_HOST`, the repository allowlist and the Anthropic stage positions. With nothing configured the profile is `exe-dev`, and behaviour is what it was before profiles existed.
 
 ## Selecting a platform
 
@@ -91,7 +91,7 @@ After changing either selection source, rerun full provisioning before restartin
 
 Run the full inventory with `rg -n 'exe\.xyz|exe-dev-github-integration|169\.254\.169\.254|giuseppecrj/pi-herdr-factorio' server src extension`.
 
-- `src/platform.ts` holds the built-in exe-dev network, identity and repository defaults. Its `exe-dev-integration` placeholder is deliberately retained for host Pi, not used as a GitHub token.
+- `src/trust/platform.ts` holds the built-in exe-dev network, identity and repository defaults. Its `exe-dev-integration` placeholder is deliberately retained for host Pi, not used as a GitHub token.
 - `server/sandbox/echo-fixture.ts` holds a redirect target for a test, not a platform value.
 - `server/factory.service:18` deliberately keeps the repository in `ExecStart`. The unit also retains its `/home/exedev` paths and `User=exedev` (`Group=exedev` too); those deployment values are not profile-selected. It no longer hard-codes an exe-dev host.
 

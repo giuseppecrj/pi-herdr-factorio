@@ -5,7 +5,7 @@ import {
 	MAX_FEEDBACK_BATCHES,
 	type FeedbackObservation,
 	type FeedbackBatchStatus,
-} from "../src/feedback.ts";
+} from "../src/candidate/feedback.ts";
 import { test } from "node:test";
 import {
 	beginCandidate,
@@ -39,7 +39,7 @@ import {
 	type Verdict,
 	type Run,
 } from "../src/core/run.ts";
-import { advance } from "../src/stages.ts";
+import { advance } from "../src/candidate/stages.ts";
 import {
 	TRUSTED_RUN_CAP,
 	TRUSTED_WORKFLOW,
@@ -47,24 +47,24 @@ import {
 	fakeIssue,
 	BOT_LOGIN,
 } from "./fake-ticket-adapter.ts";
-import { classifyFeedback } from "../src/feedback.ts";
+import { classifyFeedback } from "../src/candidate/feedback.ts";
 import { storeFeedbackBatch } from "../server/controller.ts";
 import { type FamilyInput, familyLabel } from "../src/core/models.ts";
-import { type ReviewReceipt, reviewR8 } from "../src/review.ts";
+import { type ReviewReceipt, reviewR8 } from "../src/candidate/review.ts";
 import {
 	dispatchNonce,
 	type TrustedReport,
 	type ValidationState,
-} from "../src/validation.ts";
+} from "../src/candidate/validation.ts";
 import { candidateBranch } from "../src/publication.ts";
 import type { JsonValue } from "../src/core/json.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
-import { storePatch, type PatchReceipt } from "../src/build.ts";
+import { storePatch, type PatchReceipt } from "../src/candidate/build.ts";
 import { controllerCandidatePort } from "../server/controller.ts";
 import { sandboxExecutor } from "../server/sandbox.ts";
 import type { Log } from "../src/orchestrator.ts";
-import { fileAdmissionStore } from "../src/admission.ts";
-import { CONTROLLER_LOGIN } from "../src/markers.ts";
+import { fileAdmissionStore } from "../src/trust/admission.ts";
+import { CONTROLLER_LOGIN } from "../src/trust/markers.ts";
 import {
 	candidateLifecycleFixture,
 	verdictAssessment,
@@ -81,7 +81,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fieldOf, objectOf, parseJson } from "../src/core/json.ts";
-import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 
 const sha = "a".repeat(40);
 const repo = "nublai/pi-herdr-factorio";
@@ -270,10 +270,10 @@ function pending<K extends CandidateEffect["kind"]>(
 function validated(
 	state: CandidateState,
 	passes = true,
-	failure?: import("../src/diagnosis.ts").FailureClass,
+	failure?: import("../src/candidate/diagnosis.ts").FailureClass,
 	tamper?: (
-		read: import("../src/validation.ts").ReadAssessment,
-	) => import("../src/validation.ts").ReadAssessment,
+		read: import("../src/candidate/validation.ts").ReadAssessment,
+	) => import("../src/candidate/validation.ts").ReadAssessment,
 	now?: number,
 ) {
 	const request = pending(state, "validate");
@@ -2108,15 +2108,15 @@ test("only a candidate assessment repairs; other classes stop or hold durably, a
 
 test("an assessment bound to another verdict or contradicting it never repairs", () => {
 	for (const tamper of [
-		(read: import("../src/validation.ts").ReadAssessment) => ({
+		(read: import("../src/candidate/validation.ts").ReadAssessment) => ({
 			...read,
 			binding: { ...read.binding, generation: 1 },
 		}),
-		(read: import("../src/validation.ts").ReadAssessment) => ({
+		(read: import("../src/candidate/validation.ts").ReadAssessment) => ({
 			...read,
 			binding: { ...read.binding, verdictDigest: digestOf("other") },
 		}),
-		(read: import("../src/validation.ts").ReadAssessment) => ({
+		(read: import("../src/candidate/validation.ts").ReadAssessment) => ({
 			...read,
 			assessment: { kind: "passed" as const },
 		}),
@@ -4430,7 +4430,9 @@ for (const ending of roundEndings)
 			const request = pending(state, "validate");
 
 			if (ending !== "validation_evidence") {
-				const failure: import("../src/diagnosis.ts").FailureClass | undefined =
+				const failure:
+					| import("../src/candidate/diagnosis.ts").FailureClass
+					| undefined =
 					ending === "oracle"
 						? { kind: "oracle", cause: "unexpected_base", scenarios: ["S1"] }
 						: ending === "infrastructure"
@@ -4654,7 +4656,10 @@ for (const ending of roundEndings)
 			github.add(fakeIssue(pin.issue));
 			const pr = github.add(fakeIssue(5, { pullRequest: true }));
 
-			const exec: import("../src/gh.ts").Exec = async (command, args) =>
+			const exec: import("../src/github/exec.ts").Exec = async (
+				command,
+				args,
+			) =>
 				args.includes("DELETE") &&
 				args.some((arg) => arg.endsWith("/labels/factory%3Areview"))
 					? { code: 0, stderr: "", stdout: "" }
@@ -5804,7 +5809,10 @@ for (const outcome of [
 
 			let firstReceipt = "";
 
-			const exec: import("../src/gh.ts").Exec = async (command, args) => {
+			const exec: import("../src/github/exec.ts").Exec = async (
+				command,
+				args,
+			) => {
 				if (
 					args.includes("PATCH") &&
 					args.some((arg) => /issues\/comments\/\d+$/.test(arg))
@@ -7227,7 +7235,10 @@ for (const [pinned, via] of [
 			const requested: JsonValue[] = [];
 			const events: { event: string; fields: object }[] = [];
 
-			const exec: import("../src/gh.ts").Exec = async (command, args) => {
+			const exec: import("../src/github/exec.ts").Exec = async (
+				command,
+				args,
+			) => {
 				if (
 					args.some((a) => a.includes("contents/.github/factory/WORKFLOW.md"))
 				)

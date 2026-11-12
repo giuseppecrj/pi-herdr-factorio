@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { CommentEdit, IssueComment } from "../src/adapters/github.ts";
+import type { CommentEdit, IssueComment } from "../src/github/adapter.ts";
 import {
 	CONTROLLER_LOGIN,
 	currentMarker,
@@ -12,7 +12,7 @@ import {
 	markerLedger,
 	parseMarker,
 	RUN_STATUSES,
-} from "../src/markers.ts";
+} from "../src/trust/markers.ts";
 import { digestOf, runIdOf } from "../src/core/run.ts";
 import type { HandoffReason } from "../src/handoff.ts";
 import type { JsonValue } from "../src/core/json.ts";
@@ -22,7 +22,7 @@ import {
 	isRepoSlug,
 	type RepoSlug,
 } from "../src/workflow.ts";
-import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 
 function slug(text: string): RepoSlug {
 	if (!isRepoSlug(text)) throw new Error(`bad slug ${text}`);

@@ -22,8 +22,8 @@ import {
 	acceptanceDigestOf,
 	acceptanceEntries,
 	type AcceptanceSuite,
-} from "../src/accept.ts";
-import { ARTIFACT_ACCESS, fileArtifacts } from "../src/artifacts.ts";
+} from "../src/contract/acceptance.ts";
+import { ARTIFACT_ACCESS, fileArtifacts } from "../src/contract/artifacts.ts";
 import { digestOf } from "../src/core/run.ts";
 import {
 	type Contract,

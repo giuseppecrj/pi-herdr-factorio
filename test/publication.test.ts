@@ -31,7 +31,7 @@ import {
 	readLedgerFile,
 } from "../src/publication.ts";
 import { digestOf, REQUIRED_CI_CHECKS } from "../src/core/run.ts";
-import { type Exec, type ExecResult } from "../src/gh.ts";
+import { type Exec, type ExecResult } from "../src/github/exec.ts";
 import {
 	fieldOf,
 	objectOf,
@@ -46,15 +46,15 @@ import {
 	contractBytes,
 	contractDigestOf,
 } from "../src/specify.ts";
-import { type AcceptanceSuite } from "../src/accept.ts";
-import { fileArtifacts } from "../src/artifacts.ts";
+import { type AcceptanceSuite } from "../src/contract/acceptance.ts";
+import { fileArtifacts } from "../src/contract/artifacts.ts";
 import {
 	collectPatch,
 	storePatch,
 	finishPatch,
 	prepareRepairTree,
 	publicationTree,
-} from "../src/build.ts";
+} from "../src/candidate/build.ts";
 import {
 	controllerValidator,
 	sweepValidation,
@@ -65,19 +65,19 @@ import {
 	type ValidationState,
 	readFeedbackBytes,
 	feedbackBytes,
-} from "../src/validation.ts";
+} from "../src/candidate/validation.ts";
 import { baseTreeDigest, replacementDigest } from "../server/gates.ts";
-import { CONTROLLER_LOGIN } from "../src/markers.ts";
+import { CONTROLLER_LOGIN } from "../src/trust/markers.ts";
 import { LedgerGit } from "./ledger-git.ts";
 import {
 	withLocalArtifactDownload,
 	preparedReviewFixture,
 	storedAssessment,
 } from "./helpers.ts";
-import { classifyFeedback } from "../src/feedback.ts";
+import { classifyFeedback } from "../src/candidate/feedback.ts";
 import { storeFeedbackBatch } from "../server/controller.ts";
 import { sandboxExecutor } from "../server/sandbox.ts";
-import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 
 const repo = "giuseppecrj/pi-herdr-factorio";
 const baseSha = "a".repeat(40);
@@ -1176,7 +1176,7 @@ describe("fix round 1 recovery regressions", () => {
 			"-e",
 			`
 			import {controllerValidator} from './server/controller.ts';
-			import {EXE_DEV_PLATFORM} from './src/platform.ts';
+			import {EXE_DEV_PLATFORM} from './src/trust/platform.ts';
 			const input = JSON.parse(process.argv[1]);
 			const exec = async (_, args) => {
 				if (args.includes('DELETE')) process.kill(process.pid, 'SIGKILL');

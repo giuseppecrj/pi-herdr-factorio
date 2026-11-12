@@ -8,10 +8,10 @@ import {
 	GitHubTicketWriter,
 	isLogin,
 	type Login,
-} from "../src/adapters/github.ts";
-import { READY_LABEL } from "../src/policy.ts";
+} from "../src/github/adapter.ts";
+import { READY_LABEL } from "../src/trust/policy.ts";
 import { type JsonValue } from "../src/core/json.ts";
-import { ticketKey } from "../src/tickets.ts";
+import { ticketKey } from "../src/github/tickets.ts";
 import { type Exec, isRepoSlug, type RepoSlug } from "../src/workflow.ts";
 import {
 	BOT_LOGIN,

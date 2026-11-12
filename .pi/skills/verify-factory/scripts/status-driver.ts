@@ -1,6 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { registerFactory } from "../../../../extension/index.ts";
-import { readPlatformFile, resolvePlatform } from "../../../../src/platform.ts";
+import {
+	readPlatformFile,
+	resolvePlatform,
+} from "../../../../src/trust/platform.ts";
 
 let handler: ((args: string) => Promise<void>) | undefined;
 const sent: string[] = [];

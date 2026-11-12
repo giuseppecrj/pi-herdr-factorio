@@ -1,22 +1,27 @@
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
-import { exclusive, present, privateDir, regularText } from "./artifacts.ts";
-import { checkChangedPaths } from "./policy.ts";
+import {
+	exclusive,
+	present,
+	privateDir,
+	regularText,
+} from "../contract/artifacts.ts";
+import { checkChangedPaths } from "../trust/policy.ts";
 import {
 	blocksReview,
 	digestOf,
 	type Digest,
 	type Verdict,
 	verdictPasses,
-} from "./core/run.ts";
+} from "../core/run.ts";
 
 export {
 	REVIEW_MAX_TOKENS,
 	REPAIR_BUILD_MAX_TOKENS,
 	blocksReview,
-} from "./core/run.ts";
+} from "../core/run.ts";
 
-import type { Contract } from "./specify.ts";
+import type { Contract } from "../specify.ts";
 import {
 	arrayOf,
 	countOf,
@@ -25,7 +30,7 @@ import {
 	parseJson,
 	textOf,
 	type JsonValue,
-} from "./core/json.ts";
+} from "../core/json.ts";
 import {
 	certifyR8,
 	FAMILY_MISSING,
@@ -33,7 +38,7 @@ import {
 	type CertificationFamilies,
 	type FamilyInput,
 	type R8,
-} from "./core/models.ts";
+} from "../core/models.ts";
 
 export class ReviewEvidenceUnavailable extends Error {}
 
@@ -344,7 +349,7 @@ export function reviewSeats(
 ): ReviewSeat[] {
 	const risk =
 		paths.some((path) =>
-			/^(?:src\/(?:policy|admission|stages|workflow|artifacts|review|gh)\.ts|src\/(?:adapters|core)\/|src\/trust\/|server\/sandbox(?:\.ts|\/)|server\/(?:gates\.ts|provision\.sh)|package(?:-lock)?\.json$|skills\/)/.test(
+			/^(?:src\/workflow\.ts|src\/(?:core|trust)\/|src\/github\/(?:adapter|exec)\.ts|src\/contract\/artifacts\.ts|src\/candidate\/(?:stages|review)\.ts|server\/sandbox(?:\.ts|\/)|server\/(?:gates\.ts|provision\.sh)|package(?:-lock)?\.json$|skills\/)/.test(
 				path,
 			),
 		) ||

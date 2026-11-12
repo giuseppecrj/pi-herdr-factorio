@@ -25,11 +25,11 @@ import {
 	EXCLUDED_RUNS,
 	type DefectIssue,
 	type DefectRead,
-} from "../src/metrics.ts";
+} from "../src/views/metrics.ts";
 import { digestOf, runIdOf } from "../src/core/run.ts";
 import { isRepoSlug, type Exec } from "../src/workflow.ts";
 import { noPlatformFile } from "./helpers.ts";
-import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 
 const repo = "giuseppecrj/pi-herdr-factorio";
 
@@ -737,7 +737,7 @@ describe("factory metrics", () => {
 		assert.equal(value.primary.unknownTickets, 1000);
 		assert.ok(elapsed < 2000, `${elapsed} ms exceeds 2 s`);
 		assert.doesNotMatch(
-			readFileSync(new URL("../src/metrics.ts", import.meta.url), "utf8"),
+			readFileSync(new URL("../src/views/metrics.ts", import.meta.url), "utf8"),
 			/from\s+["'][^"']*(?:executor|sandbox)/,
 		);
 	});

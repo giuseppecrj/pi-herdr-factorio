@@ -5,7 +5,7 @@ export const REVIEW_MAX_TOKENS = 120_000;
 export const REPAIR_BUILD_MAX_TOKENS = 300_000;
 
 export function blocksReview(
-	seats: readonly import("../review.ts").SeatResult[],
+	seats: readonly import("../candidate/review.ts").SeatResult[],
 ): boolean {
 	return seats.some(
 		(seat) =>

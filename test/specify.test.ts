@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { buildPrompt } from "../src/build.ts";
+import { buildPrompt } from "../src/candidate/build.ts";
 import {
 	existsSync,
 	lstatSync,
@@ -22,10 +22,13 @@ import {
 	ghTarball,
 	readTarball,
 } from "../server/controller.ts";
-import { fileAdmissionStore, type AdmittedReceipt } from "../src/admission.ts";
-import { GitHubTicketWriter } from "../src/adapters/github.ts";
-import type { Exec } from "../src/gh.ts";
-import { CONTROLLER_LOGIN, markerLedger } from "../src/markers.ts";
+import {
+	fileAdmissionStore,
+	type AdmittedReceipt,
+} from "../src/trust/admission.ts";
+import { GitHubTicketWriter } from "../src/github/adapter.ts";
+import type { Exec } from "../src/github/exec.ts";
+import { CONTROLLER_LOGIN, markerLedger } from "../src/trust/markers.ts";
 import type { LogFields } from "../src/orchestrator.ts";
 import { type Digest, digestOf, runIdOf } from "../src/core/run.ts";
 import type { JsonValue } from "../src/core/json.ts";
@@ -63,7 +66,7 @@ import {
 } from "../src/workflow.ts";
 
 import { withUmask } from "./helpers.ts";
-import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 
 function slug(text: string): RepoSlug {
 	if (!isRepoSlug(text)) throw new Error(`bad slug ${text}`);

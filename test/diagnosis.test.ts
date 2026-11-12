@@ -13,7 +13,10 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
-import { acceptanceEntries, writeAcceptance } from "../src/accept.ts";
+import {
+	acceptanceEntries,
+	writeAcceptance,
+} from "../src/contract/acceptance.ts";
 import {
 	assessBase,
 	assessVisibleChecks,
@@ -37,7 +40,7 @@ import {
 	type SuiteSignal,
 	type HeldoutReplay,
 	type TreeReplay,
-} from "../src/diagnosis.ts";
+} from "../src/candidate/diagnosis.ts";
 import { digestOf } from "../src/core/run.ts";
 import {
 	contractBytes,
@@ -82,18 +85,18 @@ import {
 	readFeedbackBytes,
 	validationDir,
 	type ValidationState,
-} from "../src/validation.ts";
+} from "../src/candidate/validation.ts";
 import {
 	collectPatch,
 	finishPatch,
 	readPatch,
 	storePatch,
-} from "../src/build.ts";
+} from "../src/candidate/build.ts";
 import { generationIntent } from "../src/handoff.ts";
 import { candidateBranch } from "../src/publication.ts";
-import { CONTROLLER_LOGIN } from "../src/markers.ts";
-import type { Exec } from "../src/gh.ts";
-import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { CONTROLLER_LOGIN } from "../src/trust/markers.ts";
+import type { Exec } from "../src/github/exec.ts";
+import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 
 function missingTool(argv: readonly string[]): string | null {
 	const [command = "", ...args] = argv;
@@ -1812,7 +1815,7 @@ test("classifier: a non-heldout candidate check failure alone is candidate and n
 
 test("legacy materializer fixture stays out of production imports", () => {
 	for (const file of [
-		"src/diagnosis.ts",
+		"src/candidate/diagnosis.ts",
 		"server/gates.ts",
 		"server/controller.ts",
 	])

@@ -36,7 +36,7 @@ async function entries(dir: string): Promise<string[]> {
 }
 
 function platformProfile() {
-	return import("../../../../src/platform.ts").then(
+	return import("../../../../src/trust/platform.ts").then(
 		async ({ readPlatformFile, resolvePlatform }) => {
 			const platform = await resolvePlatform({
 				env: (name) => process.env[name],
@@ -120,10 +120,10 @@ async function settle(): Promise<void> {
 		{ isRepoSlug },
 		{ objectOf, parseJson },
 	] = await Promise.all([
-		import("../../../../src/replay.ts"),
+		import("../../../../src/maintenance/replay.ts"),
 		import("../../../../server/controller.ts"),
 		import("../../../../src/core/run.ts"),
-		import("../../../../src/platform.ts"),
+		import("../../../../src/trust/platform.ts"),
 		import("../../../../src/core/json.ts"),
 	]);
 
@@ -336,7 +336,7 @@ async function fixtureReady(): Promise<void> {
 		{ loadReplayCorpus, REPLAY_CORPUS },
 		{ arrayOf, fieldOf, objectOf, parseJson, textOf },
 	] = await Promise.all([
-		import("../../../../src/replay.ts"),
+		import("../../../../src/maintenance/replay.ts"),
 		import("../../../../src/core/json.ts"),
 	]);
 
@@ -484,8 +484,8 @@ async function prepare(): Promise<void> {
 		{ loadReplayCorpus, reserveReplay, replayStageCaps, REPLAY_CORPUS },
 	] = await Promise.all([
 		import("../../../../src/workflow.ts"),
-		import("../../../../src/platform.ts"),
-		import("../../../../src/replay.ts"),
+		import("../../../../src/trust/platform.ts"),
+		import("../../../../src/maintenance/replay.ts"),
 	]);
 
 	const [path, key, record, headSha, controlSha, bootstrap, issue] = [

@@ -16,7 +16,7 @@ The last recorded runtime correspondence revision is `3c62fc7`. Do not treat the
 | Runtime owner | Model responsibility |
 | --- | --- |
 | `src/handoff.ts` | Candidate generations, execution accounts, certification, feedback repair, owner-head recertification, stop, and finish |
-| `src/stages.ts` | Public `advance` delegates candidate policy to `handoffCandidate` |
+| `src/candidate/stages.ts` | Public `advance` delegates candidate policy to `handoffCandidate` |
 | `src/orchestrator.ts` | Persisted intent, effect interpretation, captured callback, and restart recovery |
 | `src/publication.ts`, `server/controller.ts` | Publication, non-force promotion, CI deadlines, and owned ref cleanup |
 | `test/handoff.test.ts`, `test/orchestrator.test.ts`, `test/publication.test.ts` | Runtime correspondence through the named F4 runner |

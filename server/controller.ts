@@ -4,8 +4,8 @@ import {
 	explainFindings,
 	EXPLAIN_MAX_TOKENS,
 	EXPLAIN_WALL_MS,
-} from "../src/explain.ts";
-import { measurementPrimary } from "../src/metrics.ts";
+} from "../src/views/explain.ts";
+import { measurementPrimary } from "../src/views/metrics.ts";
 import {
 	allocateMeasurement,
 	measurementDir,
@@ -23,7 +23,7 @@ import {
 	FAMILY_NOTE,
 	type MeasurementKind,
 	type MeasurementOwner,
-} from "../src/scorers.ts";
+} from "../src/maintenance/scorers.ts";
 import {
 	fileArtifacts,
 	readStoredContract,
@@ -31,12 +31,12 @@ import {
 	exclusive,
 	privateDir,
 	present,
-} from "../src/artifacts.ts";
+} from "../src/contract/artifacts.ts";
 import {
 	readPatch,
 	publicationTree,
 	readRepairBuildResult,
-} from "../src/build.ts";
+} from "../src/candidate/build.ts";
 import {
 	canonicalJson,
 	classifyFeedback,
@@ -50,9 +50,12 @@ import {
 	type FeedbackEvent,
 	type FeedbackId,
 	type FeedbackObservation,
-} from "../src/feedback.ts";
-import { cadenceMarker } from "../src/markers.ts";
-import { type PlatformProfile, platformSummary } from "../src/platform.ts";
+} from "../src/candidate/feedback.ts";
+import { cadenceMarker } from "../src/trust/markers.ts";
+import {
+	type PlatformProfile,
+	platformSummary,
+} from "../src/trust/platform.ts";
 import {
 	CadenceRunner,
 	cadenceSkills,
@@ -76,7 +79,7 @@ import {
 	type CadenceKnownProposal,
 	type CadenceProposal,
 	type CadenceResult,
-} from "../src/cadence.ts";
+} from "../src/maintenance/cadence.ts";
 import {
 	promotedHead,
 	handoffGeneration,
@@ -101,13 +104,16 @@ import {
 	type OwnedPullRequest,
 	type GitHubFailure,
 	isLogin,
-} from "../src/adapters/github.ts";
-import { fileAdmissionStore, latestReadyEntry } from "../src/admission.ts";
+} from "../src/github/adapter.ts";
+import {
+	fileAdmissionStore,
+	latestReadyEntry,
+} from "../src/trust/admission.ts";
 import {
 	READY_LABEL,
 	REPO_SWITCH_LABEL,
 	hasWriteAccess,
-} from "../src/policy.ts";
+} from "../src/trust/policy.ts";
 import {
 	type CommitIdentity,
 	GitHubPublicationApi,
@@ -141,7 +147,7 @@ import {
 	readAssessmentBytes,
 	type ReadAssessment,
 	type ValidationAssessment,
-} from "../src/validation.ts";
+} from "../src/candidate/validation.ts";
 import {
 	arrayOf,
 	objectOf,
@@ -151,7 +157,7 @@ import {
 	textsOf,
 	countOf,
 } from "../src/core/json.ts";
-import { type Exec } from "../src/gh.ts";
+import { type Exec } from "../src/github/exec.ts";
 import { digestOf, type Verdict } from "../src/core/run.ts";
 import { type Stage, isStage, STAGE_ORDER } from "../src/core/stages.ts";
 import { ACCEPTANCE_SUITE_PREFIX } from "../src/trust/protected-paths.ts";
@@ -199,7 +205,7 @@ import {
 	familyClaimsHold,
 	reviewR8,
 	findingFingerprints,
-} from "../src/review.ts";
+} from "../src/candidate/review.ts";
 import { execFile, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
@@ -236,12 +242,12 @@ import {
 	type DiagnosisNeeds,
 	type FailureClass,
 	type HeldoutReplay,
-} from "../src/diagnosis.ts";
+} from "../src/candidate/diagnosis.ts";
 import {
 	writeAcceptance,
 	acceptanceDigestOf,
 	type AcceptanceSuite,
-} from "../src/accept.ts";
+} from "../src/contract/acceptance.ts";
 import type { DraftCheckContext, StageRunInput } from "./sandbox.ts";
 import type { Contract, ReplacedTest } from "../src/specify.ts";
 import { scopeOwner, scopeUnit, stopScopeArgv } from "./sandbox/scope.ts";
@@ -266,7 +272,11 @@ import { fileURLToPath } from "node:url";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { gunzipSync } from "node:zlib";
-import { isRunStatus, parseMarker, MARKER_PREFIX } from "../src/markers.ts";
+import {
+	isRunStatus,
+	parseMarker,
+	MARKER_PREFIX,
+} from "../src/trust/markers.ts";
 import { type Digest, isDigest } from "../src/core/run.ts";
 import type {
 	Checkout,

@@ -5,7 +5,7 @@
 | Path | What it does | Planned owner |
 | --- | --- | --- |
 | `cli.ts` | Every `node server/cli.ts <verb>` command. `docs/operations/factory-cli.md` documents the verbs. | `host/cli` |
-| `cli/` | Host collectors for the read verbs: `owner-feed.ts` and `measurement.ts` read controller state and stage receipts for the views in `src/feed.ts` and `src/explain.ts`, and `replay.ts` checks installed asset bundles. Verb dispatch stays in `cli.ts`. | `host/cli` |
+| `cli/` | Host collectors for the read verbs: `owner-feed.ts` and `measurement.ts` read controller state and stage receipts for the views in `src/views/feed.ts` and `src/views/explain.ts`, and `replay.ts` checks installed asset bundles. Verb dispatch stays in `cli.ts`. | `host/cli` |
 | `controller.ts` | The serve loop, controller lock, run files, outbox, measurement and validation sweep. | `host/controller` |
 | `controller/state.ts` | Reads the controller's status file, lock and stored verdicts without taking the lock. | `host/controller` |
 | `sandbox.ts` | Runs one stage in a bwrap sandbox and settles its receipt. | `host/sandbox` |

@@ -1,4 +1,4 @@
-import type { PatchRead, PatchReceipt } from "./build.ts";
+import type { PatchRead, PatchReceipt } from "./candidate/build.ts";
 import {
 	MAX_FEEDBACK_SEEN,
 	MAX_FEEDBACK_BATCHES,
@@ -7,8 +7,8 @@ import {
 	type FeedbackCursor,
 	type FeedbackObservation,
 	type FeedbackBatchRef,
-} from "./feedback.ts";
-import { checkChangedPaths } from "./policy.ts";
+} from "./candidate/feedback.ts";
+import { checkChangedPaths } from "./trust/policy.ts";
 import {
 	familyClaimsHold,
 	findingFingerprints,
@@ -19,7 +19,7 @@ import {
 	type ReviewReceipt,
 	type ReviewInputRefusal,
 	type ReviewSeat,
-} from "./review.ts";
+} from "./candidate/review.ts";
 import { parseFamily } from "./core/models.ts";
 import {
 	REPAIR_BUILD_MAX_TOKENS,
@@ -35,7 +35,7 @@ import type {
 	ReadAssessment,
 	TrustedReport,
 	ValidationState,
-} from "./validation.ts";
+} from "./candidate/validation.ts";
 import {
 	isGitSha,
 	isRepoSlug,
@@ -571,7 +571,7 @@ export type CandidateStep = Readonly<{
 
 export type CandidateProjection = Readonly<{
 	stage: import("./core/stages.ts").Stage;
-	status: import("./markers.ts").RunStatus;
+	status: import("./trust/markers.ts").RunStatus;
 	attempt: number;
 	round: number;
 	progress: import("./core/run.ts").Progress;
@@ -581,7 +581,7 @@ export function candidateProjection(
 	state: CandidateState,
 ): CandidateProjection {
 	let stage: import("./core/stages.ts").Stage = "validate";
-	let status: import("./markers.ts").RunStatus = "running";
+	let status: import("./trust/markers.ts").RunStatus = "running";
 	let round = 0;
 	let attempt = 1;
 	let progress: import("./core/run.ts").Progress | null = null;

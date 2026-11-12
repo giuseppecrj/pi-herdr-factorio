@@ -8,7 +8,7 @@ import {
 	type OwnerFeed,
 	type OwnerHeader,
 	type RunReads,
-} from "../../src/feed.ts";
+} from "../../src/views/feed.ts";
 import type { RepoSlug } from "../../src/workflow.ts";
 import {
 	readLock,

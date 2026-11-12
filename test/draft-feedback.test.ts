@@ -19,7 +19,7 @@ import {
 	type BaseEvidence,
 	type TestFailure,
 	type DraftDetail,
-} from "../src/diagnosis.ts";
+} from "../src/candidate/diagnosis.ts";
 import { parseDraftDetails } from "../server/gates.ts";
 import { controllerBaseChecker } from "../server/controller.ts";
 import { digestOf } from "../src/core/run.ts";

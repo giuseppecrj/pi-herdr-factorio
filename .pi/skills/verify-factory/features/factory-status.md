@@ -37,4 +37,4 @@ Capture tested head/tree, state provenance, command, output, timestamps, zero mo
 
 - `pi -p "/factory status"` does not run the command. It sends the text to the model and spends credits. Use the driver.
 - The driver registers the extension on a stub Pi. It proves the registered handler and its output, not Pi's TUI rendering.
-- Read the target restrictions in `../SKILL.md` first. Legacy drivers are not authorized layout-program VM lanes. `status-json.md` still describes the older six-group view. Current `src/attention.ts` adds the separate `budget` kind, so compare with code and CLI output.
+- Read the target restrictions in `../SKILL.md` first. Legacy drivers are not authorized layout-program VM lanes. `status-json.md` still describes the older six-group view. Current `src/views/attention.ts` adds the separate `budget` kind, so compare with code and CLI output.

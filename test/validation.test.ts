@@ -33,9 +33,12 @@ import {
 	parseValidationState,
 	validationDir,
 	dispatchNonce,
-} from "../src/validation.ts";
-import { acceptanceDigestOf, type AcceptanceSuite } from "../src/accept.ts";
-import { CONTROLLER_LOGIN } from "../src/markers.ts";
+} from "../src/candidate/validation.ts";
+import {
+	acceptanceDigestOf,
+	type AcceptanceSuite,
+} from "../src/contract/acceptance.ts";
+import { CONTROLLER_LOGIN } from "../src/trust/markers.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
 import {
 	passingVerdict,
@@ -49,7 +52,7 @@ import {
 	fileRunFiles,
 	sweepValidation,
 } from "../server/controller.ts";
-import { fileArtifacts } from "../src/artifacts.ts";
+import { fileArtifacts } from "../src/contract/artifacts.ts";
 import {
 	contractBytes,
 	contractDigestOf,
@@ -60,7 +63,7 @@ import {
 	storePatch,
 	finishPatch,
 	readPatch,
-} from "../src/build.ts";
+} from "../src/candidate/build.ts";
 import {
 	generationIntent,
 	handoffCandidate,
@@ -68,8 +71,8 @@ import {
 	candidateUsage,
 } from "../src/handoff.ts";
 import { candidateBranch, storeOwnerPatch } from "../src/publication.ts";
-import type { Exec } from "../src/gh.ts";
-import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import type { Exec } from "../src/github/exec.ts";
+import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 
 const candidateSha = "c".repeat(40);
 const gateSha = "a".repeat(40);

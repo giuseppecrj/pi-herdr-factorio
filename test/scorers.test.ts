@@ -22,7 +22,7 @@ import {
 	scoreHistory,
 	allocateMeasurement,
 	automaticScoreEnrolled,
-} from "../src/scorers.ts";
+} from "../src/maintenance/scorers.ts";
 import { pumpScoreOutbox, pumpLedgerOutbox } from "../server/controller.ts";
 import {
 	latestScores,
@@ -43,7 +43,7 @@ import {
 	SCORE_FILE,
 } from "../src/publication.ts";
 import { LedgerGit, repo } from "./ledger-git.ts";
-import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 import { trustedWorkflowFor } from "./fake-ticket-adapter.ts";
 
 // The frozen ledger rows were recorded under the fixture repository's name.
@@ -218,10 +218,10 @@ it("fingerprints cover prompt, labels, passing score and pinned grader, not samp
 		),
 		baseline,
 	);
-	assert.equal(scorerTouched(["src/scorers.ts"]), true);
+	assert.equal(scorerTouched(["src/maintenance/scorers.ts"]), true);
 	assert.equal(scorerTouched([".github/factory/WORKFLOW.md"]), true);
 	assert.equal(scorerTouched([".github/factory/scorers/a.md"]), true);
-	assert.equal(scorerTouched(["src/tickets.ts"]), false);
+	assert.equal(scorerTouched(["src/github/tickets.ts"]), false);
 });
 
 it("re-scoring retains history and tolerates foreign or forked supersession", () => {

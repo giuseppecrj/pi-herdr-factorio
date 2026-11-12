@@ -1,6 +1,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { type PlatformNetwork, platformDefect } from "../../src/platform.ts";
+import {
+	type PlatformNetwork,
+	platformDefect,
+} from "../../src/trust/platform.ts";
 import {
 	countOf,
 	fieldOf,

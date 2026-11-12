@@ -23,7 +23,7 @@ import {
 	startEchoFixture,
 } from "./http-fixtures.ts";
 import { runHeldoutBase } from "../../server/gates.ts";
-import { assessBase } from "../../src/diagnosis.ts";
+import { assessBase } from "../../src/candidate/diagnosis.ts";
 import {
 	createReadTool,
 	createGrepTool,
@@ -33,7 +33,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { streamSimple } from "@earendil-works/pi-ai/compat";
 import type { Message, Model, Usage } from "@earendil-works/pi-ai";
-import { baseTestCommand, buildPrompt } from "../../src/build.ts";
+import { baseTestCommand, buildPrompt } from "../../src/candidate/build.ts";
 import { buildPrompt as baselineBuildPrompt } from "../fixtures/efficiency/baseline-build.ts";
 import { syncBuiltinESMExports } from "node:module";
 import {
@@ -41,8 +41,8 @@ import {
 	serveLoop,
 	storeFeedbackBatch,
 } from "../../server/controller.ts";
-import { feedbackId } from "../../src/feedback.ts";
-import { fileAdmissionStore, admitTicket } from "../../src/admission.ts";
+import { feedbackId } from "../../src/candidate/feedback.ts";
+import { fileAdmissionStore, admitTicket } from "../../src/trust/admission.ts";
 import {
 	handoffCandidate,
 	parseCandidateState,
@@ -55,7 +55,7 @@ import {
 	ReviewEvidenceUnavailable,
 	reviewCandidate,
 	type SeatReceipt,
-} from "../../src/review.ts";
+} from "../../src/candidate/review.ts";
 import {
 	FakeGitHub,
 	fakeIssue,
@@ -154,18 +154,18 @@ import {
 	storePatch,
 	readPatch,
 	finishPatch,
-} from "../../src/build.ts";
+} from "../../src/candidate/build.ts";
 import { digestOf } from "../../src/core/run.ts";
 import {
 	ACCEPTANCE_SKILLS,
 	ACCEPTANCE_TOOLS,
 	acceptancePrompt,
 	writeAcceptance,
-} from "../../src/accept.ts";
+} from "../../src/contract/acceptance.ts";
 import { preparedReviewFixture, withUmask } from "../helpers.ts";
 import { manifestDigest } from "../../server/sandbox/manifest.ts";
 import { wrapPiArgv } from "../../server/sandbox/assets/pi.ts";
-import { EXE_DEV_PLATFORM } from "../../src/platform.ts";
+import { EXE_DEV_PLATFORM } from "../../src/trust/platform.ts";
 
 const FIXTURES = new URL("./fixtures/", import.meta.url).pathname;
 const RUN = "a".repeat(64);

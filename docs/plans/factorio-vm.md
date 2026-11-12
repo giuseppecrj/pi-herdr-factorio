@@ -218,7 +218,7 @@ Agents use only `factory-verify@<guest-tailnet-name>` with the dedicated key `/h
 
 **Files.**
 
-- [ ] Edit `src/platform.ts`, `server/sandbox/routes.ts`, `server/sandbox/credentials.ts`, `server/sandbox/gateway-main.ts`, `server/sandbox/gateway-client.ts`, and `server/sandbox/control.ts`.
+- [ ] Edit `src/trust/platform.ts`, `server/sandbox/routes.ts`, `server/sandbox/credentials.ts`, `server/sandbox/gateway-main.ts`, `server/sandbox/gateway-client.ts`, and `server/sandbox/control.ts`.
 - [ ] Edit `server/sandbox.ts`, `server/cli.ts`, and `src/workflow.ts` only to carry the profile and credential references.
 - [ ] Edit `test/platform.test.ts`, `test/workflow.test.ts`, and `test/sandbox/*.cases.ts` for the changed contracts.
 - [ ] Edit `docs/operations/platform.md` and `docs/operations/sandbox.md`.
@@ -281,7 +281,7 @@ Agents use only `factory-verify@<guest-tailnet-name>` with the dedicated key `/h
 **Files.**
 
 - [ ] Create `server/github-token-broker.ts`, `server/github-app-gh.ts`, and `server/factory-token-broker.service`.
-- [ ] Edit `src/adapters/github.ts` and `src/platform.ts` only for a proven installation-auth identity path if GraphQL viewer is unsupported.
+- [ ] Edit `src/github/adapter.ts` and `src/trust/platform.ts` only for a proven installation-auth identity path if GraphQL viewer is unsupported.
 - [ ] Create `test/github-token-broker.test.ts` and `test/github-app-gh.test.ts`. Edit `test/github-adapter.test.ts` for identity evidence.
 - [ ] Create `docs/operations/github-app.md`. Edit `docs/operations/ms-a2-vm.md` for credential delivery and rotation.
 
@@ -340,7 +340,7 @@ Agents use only `factory-verify@<guest-tailnet-name>` with the dedicated key `/h
 
 **Files.**
 
-- [ ] Edit `server/provision.sh`, `server/vm/ms-a2/factory.service`, `server/cli.ts`, `server/sandbox.ts`, `server/sandbox/preflight.ts`, and `src/platform.ts` for guest installation and service-user paths. Leave `server/factory.service` and the exe.dev installer's unit contract unchanged.
+- [ ] Edit `server/provision.sh`, `server/vm/ms-a2/factory.service`, `server/cli.ts`, `server/sandbox.ts`, `server/sandbox/preflight.ts`, and `src/trust/platform.ts` for guest installation and service-user paths. Leave `server/factory.service` and the exe.dev installer's unit contract unchanged.
 - [ ] Create `server/shep-factory-bridge.service`, `server/vm/ms-a2/factory-orchestrator.service`, and `server/vm/ms-a2/orchestrator-launch.sh`. Install Shep's pinned factory-chat profile through `server/provision.sh`, without authoring Shep's extension or prompt here.
 - [ ] Extend main's `test/provision.test.ts` for shared-user units and fixed-profile installation. Edit preflight cases in `test/sandbox/*.cases.ts`.
 - [ ] Edit `.pi/skills/verify-factory/scripts/drive-replay.sh` only to carry the guest profile environment for owner-run execution inside the guest. VM1's restricted SSH target still refuses replay execution.
@@ -648,7 +648,7 @@ No prototype ran during this plan-only task. No VM was created and no host setti
 
 The revision base is main `e6a3d74`. The intervening #727 changed docs only. #742 moved active operations to `nublai/pi-herdr-factorio`, made `handoff.reviewers` explicit, and added a read-only history alias. `giuseppecrj/pi-herdr-factorio` is retained history only, never an acting repository. #743 landed the one-command installer, MV3 provisioning, and the `nubl-factory` verification target. VM5 reuses those files on main, not the parked provisioning branch. The installer installs a held controller as `exedev` and does not prove cutover, retirement, or dispatch qualification. The owner installs the first real host by hand using `docs/operations/install-exe-dev.md`. #734 owns retirement of `pi-factorio` after #712's drain is verified and that host works. This plan has no receipt that marks #712 complete.
 
-MV1, MV2, and MV6 remain reusable on main. The earlier author read MV4a's drain runbook on `origin/mv4-drain-foreign-markers` and MV4b's `da9543c` file list. VM6 and VM7 reuse those patches for the later drain and identity switch from `nubl-factory`. Review their then-current tips against main before porting. The exmach VM, edge, and APNs dependencies remain parked. The platform runbook still contains legacy repository examples. For active repository defaults and the history alias, use `src/platform.ts` and #742, not those stale examples.
+MV1, MV2, and MV6 remain reusable on main. The earlier author read MV4a's drain runbook on `origin/mv4-drain-foreign-markers` and MV4b's `da9543c` file list. VM6 and VM7 reuse those patches for the later drain and identity switch from `nubl-factory`. Review their then-current tips against main before porting. The exmach VM, edge, and APNs dependencies remain parked. The platform runbook still contains legacy repository examples. For active repository defaults and the history alias, use `src/trust/platform.ts` and #742, not those stale examples.
 
 Prototype evidence still required during authorized execution follows. Each prototype gets one bounded round. Record the branch, SHA, commands, redacted logs, and any screenshot in the PR trail. A failed round ends in a blocker or a scoped amendment, not an unbounded investigation.
 
@@ -710,7 +710,7 @@ For orchestration v1, use Shep's fixed-profile pi session with only factory exte
 - Read the supplied host facts and Amendment 1 at `ms-a2-vm/facts.md` in the private trails checkout (`../pi-herdr-factorio-trails/`) before VM2. Keep their host observations and shared-user design. Use this plan's later owner sequence and current main instead of the stale production and provisioning statements.
 - Read `nublai/root`'s `.pi/plan/research/orchestration.md` for the coordinator's orchestration v1 decision. Track [#738](https://github.com/nublai/pi-herdr-factorio/issues/738) for bot refusal and creation-time labels, [#739](https://github.com/nublai/pi-herdr-factorio/issues/739) for intake references and multi-repo feed reads, and [#740](https://github.com/nublai/pi-herdr-factorio/issues/740) for the v1.1 questions link.
 - Read `docs/plans/factory-v1.md`, `docs/decisions.tsv`, and `docs/plans/exmach-move.md` for program limits, authority history, and the reusable MV work. This plan does not resume the parked exmach program.
-- Read `docs/operations/install-exe-dev.md`, `docs/operations/platform.md`, `docs/operations/sandbox.md`, `docs/operations/owner-feed.md`, `docs/operations/backup.md`, and `.pi/skills/verify-factory/SKILL.md` before changing their contracts. Check active repository and history behavior against `src/platform.ts`, and reviewer selection against `.github/factory/WORKFLOW.md`.
+- Read `docs/operations/install-exe-dev.md`, `docs/operations/platform.md`, `docs/operations/sandbox.md`, `docs/operations/owner-feed.md`, `docs/operations/backup.md`, and `.pi/skills/verify-factory/SKILL.md` before changing their contracts. Check active repository and history behavior against `src/trust/platform.ts`, and reviewer selection against `.github/factory/WORKFLOW.md`.
 - Read `git show origin/mv4-drain-foreign-markers:docs/operations/drain.md` for VM6. Read main's `server/install-exe-dev.sh`, `server/provision.sh`, `server/factory.service`, `test/install-exe-dev.test.ts`, and `test/provision.test.ts` for VM5. Read `origin/mv4b-ci-bot`'s workflow and reporter-test patch for VM7.
 - VM2, VM3, VM4, and VM5 get the how skill, `<pstack>/skills/how/SKILL.md`. Use `<pstack>/skills/interrogate/SKILL.md` only for the owner choices D1 through D7, not routine implementation details.
 - Keep the decision trail under `<pstack>/skills/show-me-your-work/SKILL.md`. Use its `log.sh` for append-only rows during execution. The planning leaf does not append coordinator decisions.

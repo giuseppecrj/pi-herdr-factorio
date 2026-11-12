@@ -1,19 +1,19 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import manifest from "../package.json" with { type: "json" };
-import { readAttention, formatAttention } from "../src/attention.ts";
+import { readAttention, formatAttention } from "../src/views/attention.ts";
 import {
 	type AdmissionReceipt,
 	type AdmissionStore,
 	admitTicket,
 	type RefusalReason,
-} from "../src/admission.ts";
+} from "../src/trust/admission.ts";
 import {
 	type PlatformProfile,
 	type PlatformResolution,
 	readPlatformFile,
 	resolvePlatform,
-} from "../src/platform.ts";
-import { formatStageTable } from "../src/stages.ts";
+} from "../src/trust/platform.ts";
+import { formatStageTable } from "../src/candidate/stages.ts";
 import { MODEL_STAGES } from "../src/core/stages.ts";
 import {
 	type EnvLookup,

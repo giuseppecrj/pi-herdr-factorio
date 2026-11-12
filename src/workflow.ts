@@ -17,14 +17,14 @@ import {
 	type GhCause,
 	type GhFailure,
 	ghFailure,
-} from "./gh.ts";
+} from "./github/exec.ts";
 import { parseAnthropicModel } from "./core/models.ts";
 import {
 	isRepoSlug,
 	type ModelPosition,
 	type PlatformProfile,
 	type RepoSlug,
-} from "./platform.ts";
+} from "./trust/platform.ts";
 import { type Digest, digestOf } from "./core/run.ts";
 import {
 	STAGE_ORDER,
@@ -180,7 +180,7 @@ export type WorkflowSnapshot = {
 	readonly warnings: readonly string[];
 };
 
-export type { Exec, ExecResult, GhCause } from "./gh.ts";
+export type { Exec, ExecResult, GhCause } from "./github/exec.ts";
 
 export type WorkflowError =
 	| {

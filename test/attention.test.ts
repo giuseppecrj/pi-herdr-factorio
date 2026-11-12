@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
-import { readAttention, ATTENTION_KINDS } from "../src/attention.ts";
+import { readAttention, ATTENTION_KINDS } from "../src/views/attention.ts";
 import { readOwnerFeed } from "../server/cli/owner-feed.ts";
 import { digestOf, runIdOf } from "../src/core/run.ts";
 import { isRepoSlug, parseWorkflow } from "../src/workflow.ts";
@@ -25,11 +25,11 @@ import {
 	type CandidateState,
 	type CandidateEvent,
 } from "../src/handoff.ts";
-import { dispatchNonce } from "../src/validation.ts";
+import { dispatchNonce } from "../src/candidate/validation.ts";
 import { candidateBranch } from "../src/publication.ts";
 import { REQUIRED_CI_CHECKS } from "../src/core/run.ts";
 import { isGitSha } from "../src/workflow.ts";
-import type { PatchReceipt } from "../src/build.ts";
+import type { PatchReceipt } from "../src/candidate/build.ts";
 import { execFileSync } from "node:child_process";
 import {
 	candidateLifecycleFixture,
@@ -39,7 +39,7 @@ import {
 import { TRUSTED_RUN_CAP, TRUSTED_WORKFLOW } from "./fake-ticket-adapter.ts";
 import { fileRunFiles } from "../server/controller.ts";
 import type { AnswersDigest } from "../src/specify.ts";
-import { EXE_DEV_PLATFORM } from "../src/platform.ts";
+import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 import { noPlatformFile } from "./helpers.ts";
 
 test("trusted attention thresholds default, validate positive integers, and reject unknown fields", () => {

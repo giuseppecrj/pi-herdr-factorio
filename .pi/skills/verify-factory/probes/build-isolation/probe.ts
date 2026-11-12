@@ -16,7 +16,7 @@ import {
 	checkoutWorkspace,
 	ghTarball,
 } from "../../../../../server/controller.ts";
-import { patchedTree, readPatch } from "../../../../../src/build.ts";
+import { patchedTree, readPatch } from "../../../../../src/candidate/build.ts";
 import {
 	gitState,
 	launchSandbox,
@@ -31,7 +31,7 @@ import { isDigest } from "../../../../../src/core/run.ts";
 import {
 	readPlatformFile,
 	resolvePlatform,
-} from "../../../../../src/platform.ts";
+} from "../../../../../src/trust/platform.ts";
 
 const [stateArg, runId, attempt = "1"] = process.argv.slice(2);
 

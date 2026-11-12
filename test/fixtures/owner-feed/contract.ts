@@ -1,4 +1,4 @@
-import { ATTENTION_KINDS } from "../../../src/attention.ts";
+import { ATTENTION_KINDS } from "../../../src/views/attention.ts";
 import type { JsonValue } from "../../../src/core/json.ts";
 import { objectOf } from "../../../src/core/json.ts";
 

@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import {
 	CONTROL_PLANE_DIR,
 	ACCEPTANCE_SUITE_PREFIX,
-} from "./trust/protected-paths.ts";
+} from "../trust/protected-paths.ts";
 import {
 	closeSync,
 	existsSync,
@@ -24,12 +24,15 @@ import {
 	parseJson,
 	textOf,
 	type JsonValue,
-} from "./core/json.ts";
-import { primaryMetricText, type measurementPrimary } from "./metrics.ts";
-import { cadenceMarker } from "./markers.ts";
-import { digestOf, isDigest, type Digest } from "./core/run.ts";
-import { inert } from "./specify.ts";
-import type { ScoreEvent } from "./ledger.ts";
+} from "../core/json.ts";
+import {
+	primaryMetricText,
+	type measurementPrimary,
+} from "../views/metrics.ts";
+import { cadenceMarker } from "../trust/markers.ts";
+import { digestOf, isDigest, type Digest } from "../core/run.ts";
+import { inert } from "../specify.ts";
+import type { ScoreEvent } from "../ledger.ts";
 import {
 	CADENCE_JOBS,
 	isGitSha,
@@ -38,7 +41,7 @@ import {
 	type CadenceJobSettings,
 	type GitSha,
 	type RepoSlug,
-} from "./workflow.ts";
+} from "../workflow.ts";
 
 export const CADENCE_SKILLS: Readonly<Record<CadenceJob, string>> = {
 	architecture: "improve-codebase-architecture",

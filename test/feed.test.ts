@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { ownerFeed, ownerHeader, type FeedEntry } from "../src/feed.ts";
+import { ownerFeed, ownerHeader, type FeedEntry } from "../src/views/feed.ts";
 import {
 	readOwnerFeed,
 	readOwnerHeader,
@@ -21,7 +21,7 @@ import {
 import { acquireLock, procTable } from "../server/controller.ts";
 import { readStoredVerdict } from "../server/controller/state.ts";
 import { readStageReceipt } from "../server/sandbox/receipts.ts";
-import { ATTENTION_KINDS, readAttention } from "../src/attention.ts";
+import { ATTENTION_KINDS, readAttention } from "../src/views/attention.ts";
 import { objectOf, parseJson } from "../src/core/json.ts";
 import type { JsonValue } from "../src/core/json.ts";
 import { runCli } from "../server/cli.ts";
