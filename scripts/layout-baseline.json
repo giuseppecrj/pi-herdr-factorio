@@ -1,0 +1,920 @@
+{
+	"version": 1,
+	"planningBase": "5bd77d572cb2bccc9c1e636c0bbe56f086658a56",
+	"imports": {
+		"exclude": [
+			"test/acceptance/**",
+			"docs/prototypes/anthropic-route/**",
+			"docs/prototypes/ledger-branch/**",
+			"docs/prototypes/vm-sandbox/**"
+		],
+		"exceptions": [
+			{
+				"file": ".pi/skills/verify-factory/scripts/status-driver.ts",
+				"specifier": "./extension/index.ts",
+				"resolveFrom": ".",
+				"until": "L02"
+			}
+		],
+		"reverseEdges": [
+			"src/accept.ts -> server/sandbox/json.ts",
+			"src/artifacts.ts -> server/sandbox/json.ts",
+			"src/build.ts -> server/sandbox/json.ts",
+			"src/cadence.ts -> server/sandbox/json.ts",
+			"src/diagnosis.ts -> server/sandbox/json.ts",
+			"src/explain.ts -> server/sandbox/json.ts",
+			"src/explain.ts -> server/sandbox.ts",
+			"src/feed.ts -> server/controller.ts",
+			"src/feed.ts -> server/sandbox/json.ts",
+			"src/feed.ts -> server/sandbox.ts",
+			"src/ledger.ts -> server/sandbox/json.ts",
+			"src/ledger.ts -> server/sandbox/result.ts",
+			"src/orchestrator.ts -> server/sandbox/result.ts",
+			"src/platform.ts -> server/sandbox/json.ts",
+			"src/publication.ts -> server/sandbox/json.ts",
+			"src/replay.ts -> server/sandbox/json.ts",
+			"src/replay.ts -> server/sandbox/manifest.ts",
+			"src/review.ts -> server/sandbox/anthropic-limits.ts",
+			"src/review.ts -> server/sandbox/audit.ts",
+			"src/review.ts -> server/sandbox/json.ts",
+			"src/scorers.ts -> server/sandbox/json.ts",
+			"src/validation.ts -> server/sandbox/json.ts",
+			"src/workflow.ts -> server/sandbox/anthropic-limits.ts"
+		]
+	},
+	"classification": {
+		"roots": [
+			"src",
+			"server",
+			"host"
+		],
+		"seatReader": {
+			"module": "src/review.ts",
+			"export": "reviewSeats"
+		},
+		"files": {
+			"server/README.md": { "owner": "server", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"server/cli.ts": { "owner": "host/cli", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"server/controller.ts": { "owner": "host/controller", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"server/factory.service": { "owner": "host/install", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"server/gates.ts": { "owner": "host/gates", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/gates/draft-reporter.mjs": { "owner": "host/gates", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"server/install-exe-dev.sh": { "owner": "host/install", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"server/provision.sh": { "owner": "host/install", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox.ts": { "owner": "host/sandbox", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox/anthropic-limits.ts": { "owner": "src/core", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox/assets/package-lock.json": { "owner": "host/bundle", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox/assets/package.json": { "owner": "host/bundle", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox/assets/pi.ts": { "owner": "host/bundle", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox/assets/stage-init.ts": { "owner": "host/bundle", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox/audit.ts": { "owner": "host/gateway", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox/bwrap.ts": { "owner": "host/isolation", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox/control.ts": { "owner": "host/gateway", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox/credentials.ts": { "owner": "host/gateway", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox/echo-fixture.ts": { "owner": "host/sandbox", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox/gateway-client.ts": { "owner": "host/gateway", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox/gateway-main.ts": { "owner": "host/gateway", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox/gateway.ts": { "owner": "host/gateway", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox/json.ts": { "owner": "src/core", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox/lines.ts": { "owner": "host/sandbox", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox/manifest.ts": { "owner": "host/bundle", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox/meter.ts": { "owner": "host/gateway", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox/policy.ts": { "owner": "host/gateway", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox/preflight.ts": { "owner": "host/isolation", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox/result.ts": { "owner": "host/sandbox", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox/routes.ts": { "owner": "host/gateway", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox/rpc.ts": { "owner": "host/sandbox", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox/scope.ts": { "owner": "host/isolation", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox/seccomp.ts": { "owner": "host/isolation", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/sandbox/settle.ts": { "owner": "host/sandbox", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"server/viewer.ts": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"server/viewer/claim.ts": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"server/viewer/dashboard.ts": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"server/viewer/design/SOURCE": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"server/viewer/design/icons/NOTICE": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"server/viewer/design/icons/icons.ts": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"server/viewer/design/tokens.css": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"server/viewer/design/tokens.json": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"server/viewer/evidence.ts": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"server/viewer/icon-192.png": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"server/viewer/icon-512.png": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"server/viewer/manifest.webmanifest": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"server/viewer/render.ts": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"server/viewer/style.css": { "owner": "host/viewer", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"src/README.md": { "owner": "src", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"src/accept.ts": { "owner": "src/contract", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"src/adapters/github.ts": { "owner": "src/github", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"src/admission.ts": { "owner": "src/trust", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"src/artifacts.ts": { "owner": "src/contract", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"src/attention.ts": { "owner": "src/views", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"src/build.ts": { "owner": "src/candidate", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"src/cadence.ts": { "owner": "src/maintenance", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"src/diagnosis.ts": { "owner": "src/candidate", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"src/explain.ts": { "owner": "src/views", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"src/feed.ts": { "owner": "src/views", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"src/feedback.ts": { "owner": "src/candidate", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"src/gh.ts": { "owner": "src/github", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"src/handoff.ts": { "owner": "src/candidate", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"src/ledger.ts": { "owner": "src/ledger", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"src/markers.ts": { "owner": "src/trust", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"src/metrics.ts": { "owner": "src/views", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"src/orchestrator.ts": { "owner": "src/controller", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"src/platform.ts": { "owner": "src/trust", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"src/policy.ts": { "owner": "src/trust", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"src/publication.ts": { "owner": "src/github", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"src/replay.ts": { "owner": "src/maintenance", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"src/review.ts": { "owner": "src/candidate", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"src/run.ts": { "owner": "src/core", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"src/scorers.ts": { "owner": "src/maintenance", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"src/specify.ts": { "owner": "src/contract", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"src/stages.ts": { "owner": "src/candidate", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" },
+			"src/tickets.ts": { "owner": "src/github", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"src/validation.ts": { "owner": "src/candidate", "seats": ["code-review", "security-review", "simplify"], "from": [], "since": "L00" },
+			"src/workflow.ts": { "owner": "src/config", "seats": ["code-review", "security-review", "simplify", "ultrareview"], "from": [], "since": "L00" }
+		},
+		"retired": {}
+	},
+	"readers": [
+		{
+			"id": "replay-stage-caps",
+			"kind": "constants",
+			"readers": [
+				"src/replay.ts"
+			],
+			"run": {
+				"module": "src/replay.ts",
+				"export": "replayStageCaps"
+			},
+			"declarations": [
+				{
+					"key": "accept",
+					"file": "src/accept.ts",
+					"name": "ACCEPTANCE_MAX_TOKENS"
+				},
+				{
+					"key": "build",
+					"file": "src/build.ts",
+					"name": "BUILD_MAX_TOKENS"
+				},
+				{
+					"key": "review",
+					"file": "src/run.ts",
+					"name": "REVIEW_MAX_TOKENS"
+				},
+				{
+					"key": "repair",
+					"file": "src/run.ts",
+					"name": "REPAIR_BUILD_MAX_TOKENS"
+				}
+			]
+		},
+		{
+			"id": "visible-test-deadline",
+			"kind": "constants",
+			"readers": [
+				".pi/skills/verify-factory/scripts/drive-replay.sh",
+				"test/integration/replay-driver.test.ts"
+			],
+			"declarations": [
+				{
+					"file": "server/sandbox.ts",
+					"name": "VISIBLE_LIMIT_MS"
+				}
+			]
+		},
+		{
+			"id": "replay-bundle-paths",
+			"kind": "paths",
+			"reader": "src/replay.ts",
+			"tokens": {
+				"const BUNDLE_PATHS = [\"skills\", \"server/sandbox/assets\", \"server/provision.sh\"];": 1
+			},
+			"targets": [
+				{
+					"path": "skills",
+					"type": "dir"
+				},
+				{
+					"path": "server/sandbox/assets",
+					"type": "dir"
+				},
+				{
+					"path": "server/provision.sh",
+					"type": "file"
+				}
+			]
+		},
+		{
+			"id": "replay-ls-tree",
+			"kind": "paths",
+			"reader": "src/replay.ts",
+			"tokens": {
+				"\"ls-tree\", \"-r\", \"--name-only\", sha, \"--\", \"skills\", \"server/sandbox/assets\", ]": 1
+			},
+			"targets": [
+				{
+					"path": "skills",
+					"type": "dir"
+				},
+				{
+					"path": "server/sandbox/assets",
+					"type": "dir"
+				}
+			]
+		},
+		{
+			"id": "replay-asset-map",
+			"kind": "paths",
+			"reader": "src/replay.ts",
+			"tokens": {
+				"[\"server/sandbox/assets/pi.ts\", \"sandbox/pi.ts\"]": 1,
+				"[\"server/sandbox/assets/stage-init.ts\", \"sandbox/stage-init.ts\"]": 1,
+				"[\"server/sandbox/assets/package.json\", \"pkg/package.json\"]": 1,
+				"[\"server/sandbox/assets/package-lock.json\", \"pkg/package-lock.json\"]": 1
+			},
+			"targets": [
+				{
+					"path": "server/sandbox/assets/pi.ts",
+					"type": "file"
+				},
+				{
+					"path": "server/sandbox/assets/stage-init.ts",
+					"type": "file"
+				},
+				{
+					"path": "server/sandbox/assets/package.json",
+					"type": "file"
+				},
+				{
+					"path": "server/sandbox/assets/package-lock.json",
+					"type": "file"
+				}
+			]
+		},
+		{
+			"id": "replay-recipe-diff",
+			"kind": "paths",
+			"reader": "src/replay.ts",
+			"tokens": {
+				"\"diff\", \"--name-only\", input.previousSha, input.candidateSha, \"--\", \"server/provision.sh\", ]": 1
+			},
+			"targets": [
+				{
+					"path": "server/provision.sh",
+					"type": "file"
+				}
+			]
+		},
+		{
+			"id": "replay-corpus",
+			"kind": "paths",
+			"reader": "src/replay.ts",
+			"tokens": {
+				"export const REPLAY_CORPUS = \"test/fixtures/replay\";": 1
+			},
+			"targets": [
+				{
+					"path": "test/fixtures/replay",
+					"type": "dir"
+				},
+				{
+					"path": "test/fixtures/replay/corpus.json",
+					"type": "file"
+				}
+			]
+		},
+		{
+			"id": "bundle-asset-files",
+			"kind": "paths",
+			"reader": "server/sandbox/manifest.ts",
+			"tokens": {
+				"[\"sandbox/pi.ts\", \"server/sandbox/assets/pi.ts\"]": 1,
+				"[\"sandbox/stage-init.ts\", \"server/sandbox/assets/stage-init.ts\"]": 1,
+				"[\"pkg/package.json\", \"server/sandbox/assets/package.json\"]": 1,
+				"[\"pkg/package-lock.json\", \"server/sandbox/assets/package-lock.json\"]": 1,
+				"join(sourceRoot, \"skills\")": 1
+			},
+			"targets": [
+				{
+					"path": "server/sandbox/assets/pi.ts",
+					"type": "file"
+				},
+				{
+					"path": "server/sandbox/assets/stage-init.ts",
+					"type": "file"
+				},
+				{
+					"path": "server/sandbox/assets/package.json",
+					"type": "file"
+				},
+				{
+					"path": "server/sandbox/assets/package-lock.json",
+					"type": "file"
+				},
+				{
+					"path": "skills",
+					"type": "dir"
+				}
+			]
+		},
+		{
+			"id": "gate-source-roots",
+			"kind": "paths",
+			"reader": "server/gates.ts",
+			"tokens": {
+				"const SOURCE = [\"src\", \"extension\", \"server\", \"skills\", \"scripts\"];": 1
+			},
+			"targets": [
+				{
+					"path": "src",
+					"type": "dir"
+				},
+				{
+					"path": "extension",
+					"type": "dir"
+				},
+				{
+					"path": "server",
+					"type": "dir"
+				},
+				{
+					"path": "skills",
+					"type": "dir"
+				},
+				{
+					"path": "scripts",
+					"type": "dir"
+				}
+			]
+		},
+		{
+			"id": "gate-draft-reporter",
+			"kind": "paths",
+			"reader": "server/gates.ts",
+			"tokens": {
+				"new URL(\"./gates/\", import.meta.url)": 1,
+				"join(detailReporter, \"draft-reporter.mjs\")": 1
+			},
+			"targets": [
+				{
+					"path": "server/gates/draft-reporter.mjs",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./gates/draft-reporter.mjs"
+					}
+				}
+			]
+		},
+		{
+			"id": "cli-source-root",
+			"kind": "paths",
+			"reader": "server/cli.ts",
+			"tokens": {
+				"sourceRoot: fileURLToPath(new URL(\"..\", import.meta.url))": 1
+			},
+			"targets": [
+				{
+					"path": ".",
+					"type": "dir",
+					"via": {
+						"from": "reader",
+						"path": ".."
+					}
+				}
+			]
+		},
+		{
+			"id": "cadence-repository-root",
+			"kind": "paths",
+			"reader": "server/controller.ts",
+			"tokens": {
+				"\"-C\", fileURLToPath(new URL(\"..\", import.meta.url)), \"diff\",": 1
+			},
+			"targets": [
+				{
+					"path": ".",
+					"type": "dir",
+					"via": {
+						"from": "reader",
+						"path": ".."
+					}
+				}
+			]
+		},
+		{
+			"id": "diagnosis-materializer",
+			"kind": "paths",
+			"reader": "server/controller.ts",
+			"tokens": {
+				"join(gate, \"server/gates.ts\")": 1,
+				"readFileSync(new URL(\"./gates.ts\", import.meta.url))": 1
+			},
+			"targets": [
+				{
+					"path": "server/gates.ts",
+					"type": "file",
+					"via": {
+						"from": ".",
+						"path": "server/gates.ts"
+					}
+				},
+				{
+					"path": "server/gates.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./gates.ts"
+					}
+				}
+			]
+		},
+		{
+			"id": "gateway-child",
+			"kind": "paths",
+			"reader": "server/sandbox/gateway-client.ts",
+			"tokens": {
+				"new URL(\"./gateway-main.ts\", import.meta.url)": 1
+			},
+			"targets": [
+				{
+					"path": "server/sandbox/gateway-main.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./gateway-main.ts"
+					}
+				}
+			]
+		},
+		{
+			"id": "viewer-assets",
+			"kind": "paths",
+			"reader": "server/viewer.ts",
+			"tokens": {
+				"[\"./viewer/design/tokens.css\", \"./viewer/style.css\"]": 1,
+				"new URL(`./viewer/${name}`, import.meta.url)": 1,
+				"path === \"/icon-192.png\" || path === \"/icon-512.png\"": 1
+			},
+			"targets": [
+				{
+					"path": "server/viewer/design/tokens.css",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./viewer/design/tokens.css"
+					}
+				},
+				{
+					"path": "server/viewer/style.css",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./viewer/style.css"
+					}
+				},
+				{
+					"path": "server/viewer/icon-192.png",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./viewer/icon-192.png"
+					}
+				},
+				{
+					"path": "server/viewer/icon-512.png",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./viewer/icon-512.png"
+					}
+				},
+				{
+					"path": "server/viewer/manifest.webmanifest",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "./viewer/manifest.webmanifest"
+					}
+				}
+			]
+		},
+		{
+			"id": "formal-test-selection",
+			"kind": "paths",
+			"reader": "docs/statecharts/journey/replay-merge-mid-repair.ts",
+			"tokens": {
+				"[\"handoff\", \"orchestrator\", \"publication\"]": 1,
+				"new URL(`../../../test/${name}.test.ts`, import.meta.url)": 1
+			},
+			"targets": [
+				{
+					"path": "test/handoff.test.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../test/handoff.test.ts"
+					}
+				},
+				{
+					"path": "test/orchestrator.test.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../test/orchestrator.test.ts"
+					}
+				},
+				{
+					"path": "test/publication.test.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../../test/publication.test.ts"
+					}
+				}
+			]
+		},
+		{
+			"id": "provisioner-root",
+			"kind": "paths",
+			"reader": "server/provision.sh",
+			"tokens": {
+				"repo=$(cd \"$(dirname \"${BASH_SOURCE[0]}\")/..\" && pwd)": 1
+			},
+			"targets": [
+				{
+					"path": ".",
+					"type": "dir",
+					"via": {
+						"from": "reader",
+						"path": ".."
+					}
+				}
+			]
+		},
+		{
+			"id": "installer-continuation",
+			"kind": "paths",
+			"reader": "server/install-exe-dev.sh",
+			"tokens": {
+				"exec bash \"$checkout/server/install-exe-dev.sh\" --continue \"$checkout\"": 1,
+				"exec bash \"$staging/server/install-exe-dev.sh\" --continue \"$staging\"": 1,
+				"[ \"${BASH_SOURCE[0]}\" = \"$continuation/server/install-exe-dev.sh\" ]": 1,
+				"done <\"$1/server/factory.service\"": 1,
+				"bash \"$checkout/server/provision.sh\"": 1,
+				"node \"$checkout/server/cli.ts\" status --json": 2
+			},
+			"targets": [
+				{
+					"path": "server/install-exe-dev.sh",
+					"type": "file"
+				},
+				{
+					"path": "server/factory.service",
+					"type": "file"
+				},
+				{
+					"path": "server/provision.sh",
+					"type": "file"
+				},
+				{
+					"path": "server/cli.ts",
+					"type": "file"
+				}
+			]
+		},
+		{
+			"id": "service-entry",
+			"kind": "paths",
+			"reader": "server/factory.service",
+			"tokens": {
+				"WorkingDirectory=/home/exedev/pi-herdr-factorio": 1,
+				"node server/cli.ts serve": 1
+			},
+			"targets": [
+				{
+					"path": "server/cli.ts",
+					"type": "file"
+				}
+			]
+		},
+		{
+			"id": "acceptance-import-depth",
+			"kind": "paths",
+			"reader": "src/accept.ts",
+			"tokens": {
+				"export const ACCEPTANCE_OUTPUT_DIR = \"checks\";": 1,
+				"A file directly in that directory is exactly four parent directories below the repository root": 1,
+				"import with ../../../../ from there, for example ../../../../src/x.ts": 1
+			},
+			"targets": [
+				{
+					"path": "src",
+					"type": "dir",
+					"via": {
+						"from": "test/acceptance/<ticket>/checks",
+						"path": "../../../../src"
+					}
+				}
+			]
+		},
+		{
+			"id": "acceptance-suite-dir",
+			"kind": "paths",
+			"reader": "src/policy.ts",
+			"tokens": {
+				"export const ACCEPTANCE_SUITE_DIR = \"test/acceptance\";": 1
+			},
+			"targets": [
+				{
+					"path": "test/acceptance",
+					"type": "dir"
+				}
+			]
+		}
+	],
+	"shell": {
+		"files": [
+			"server/*.sh",
+			"server/*.service",
+			"host/**/*.sh",
+			"host/**/*.service",
+			".pi/**/*.sh"
+		],
+		"inventory": {
+			".pi/skills/verify-factory/scripts/cleanup.sh": {
+				"tokens": {}
+			},
+			".pi/skills/verify-factory/scripts/doctor.sh": {
+				"tokens": {}
+			},
+			".pi/skills/verify-factory/scripts/drive-admit.sh": {
+				"tokens": {
+					"server/cli.ts": {
+						"path": "server/cli.ts",
+						"type": "file"
+					}
+				}
+			},
+			".pi/skills/verify-factory/scripts/drive-gh.sh": {
+				"tokens": {}
+			},
+			".pi/skills/verify-factory/scripts/drive-replay.sh": {
+				"tokens": {
+					".pi/skills/verify-factory/scripts/drive-replay.sh": {
+						"path": ".pi/skills/verify-factory/scripts/drive-replay.sh",
+						"type": "file"
+					},
+					"docs/decisions.tsv": {
+						"path": "docs/decisions.tsv",
+						"type": "file"
+					},
+					".pi/skills/verify-factory/scripts/lane-id.sh": {
+						"path": ".pi/skills/verify-factory/scripts/lane-id.sh",
+						"type": "file"
+					},
+					"server/cli.ts": {
+						"path": "server/cli.ts",
+						"type": "file"
+					},
+					"server/sandbox.ts": {
+						"path": "server/sandbox.ts",
+						"type": "file"
+					},
+					"./server/controller.ts": {
+						"path": "server/controller.ts",
+						"type": "file"
+					},
+					"./src/replay.ts": {
+						"path": "src/replay.ts",
+						"type": "file"
+					},
+					"./src/run.ts": {
+						"path": "src/run.ts",
+						"type": "file"
+					},
+					"./server/sandbox.ts": {
+						"path": "server/sandbox.ts",
+						"type": "file"
+					},
+					"./src/platform.ts": {
+						"path": "src/platform.ts",
+						"type": "file"
+					},
+					"./src/workflow.ts": {
+						"path": "src/workflow.ts",
+						"type": "file"
+					},
+					".github/factory/WORKFLOW.md": {
+						"path": ".github/factory/WORKFLOW.md",
+						"type": "file"
+					}
+				},
+				"imports": {
+					"./server/controller.ts": [
+						"readDurableAccounting",
+						"readLock"
+					],
+					"./src/replay.ts": [
+						"REPLAY_CORPUS",
+						"loadReplayCorpus",
+						"readReplayBudget",
+						"readReplayRecord",
+						"replayRow",
+						"replayStageCaps",
+						"reserveReplay",
+						"settleReplay",
+						"voidReplay"
+					],
+					"./src/run.ts": [
+						"digestOf"
+					],
+					"./server/sandbox.ts": [
+						"sandboxExecutor"
+					],
+					"./src/platform.ts": [
+						"readPlatformFile",
+						"resolvePlatform",
+						"soleRepository"
+					],
+					"./src/workflow.ts": [
+						"parseWorkflow"
+					]
+				}
+			},
+			".pi/skills/verify-factory/scripts/drive-serve.sh": {
+				"tokens": {
+					"server/cli.ts": {
+						"path": "server/cli.ts",
+						"type": "file"
+					}
+				}
+			},
+			".pi/skills/verify-factory/scripts/drive-stage.sh": {
+				"tokens": {
+					"server/cli.ts": {
+						"path": "server/cli.ts",
+						"type": "file"
+					}
+				}
+			},
+			".pi/skills/verify-factory/scripts/drive-status.sh": {
+				"tokens": {
+					".pi/skills/verify-factory/scripts/status-driver.ts": {
+						"path": ".pi/skills/verify-factory/scripts/status-driver.ts",
+						"type": "file"
+					}
+				}
+			},
+			".pi/skills/verify-factory/scripts/drive-tick.sh": {
+				"tokens": {
+					"server/cli.ts": {
+						"path": "server/cli.ts",
+						"type": "file"
+					}
+				}
+			},
+			".pi/skills/verify-factory/scripts/drive-workflow.sh": {
+				"tokens": {
+					"server/cli.ts": {
+						"path": "server/cli.ts",
+						"type": "file"
+					}
+				}
+			},
+			".pi/skills/verify-factory/scripts/lane-id.sh": {
+				"tokens": {}
+			},
+			".pi/skills/verify-factory/scripts/lane-setup.sh": {
+				"tokens": {}
+			},
+			".pi/skills/verify-factory/scripts/remote-setup.sh": {
+				"tokens": {}
+			},
+			".pi/skills/verify-factory/scripts/target.sh": {
+				"tokens": {}
+			},
+			".pi/skills/verify-factory/scripts/vm-snapshot.sh": {
+				"tokens": {}
+			},
+			".pi/skills/verify-factory/scripts/vm.sh": {
+				"tokens": {}
+			},
+			"server/factory.service": {
+				"tokens": {
+					"server/cli.ts": {
+						"path": "server/cli.ts",
+						"type": "file"
+					}
+				}
+			},
+			"server/install-exe-dev.sh": {
+				"tokens": {
+					"server/factory.service": {
+						"path": "server/factory.service",
+						"type": "file"
+					},
+					"server/cli.ts": {
+						"path": "server/cli.ts",
+						"type": "file"
+					},
+					"server/install-exe-dev.sh": {
+						"path": "server/install-exe-dev.sh",
+						"type": "file"
+					},
+					"server/provision.sh": {
+						"path": "server/provision.sh",
+						"type": "file"
+					}
+				}
+			},
+			"server/provision.sh": {
+				"tokens": {
+					"server/provision.sh": {
+						"path": "server/provision.sh",
+						"type": "file"
+					},
+					"server/cli.ts": {
+						"path": "server/cli.ts",
+						"type": "file"
+					},
+					".pi/agent": {
+						"path": ".pi/agent",
+						"type": "external"
+					},
+					".pi/agent/models.json": {
+						"path": ".pi/agent/models.json",
+						"type": "external"
+					},
+					".pi/agent/settings.json": {
+						"path": ".pi/agent/settings.json",
+						"type": "external"
+					},
+					"server/sandbox/manifest.ts": {
+						"path": "server/sandbox/manifest.ts",
+						"type": "file"
+					},
+					"server/sandbox/assets/package.json": {
+						"path": "server/sandbox/assets/package.json",
+						"type": "file"
+					},
+					"server/sandbox/assets/package-lock.json": {
+						"path": "server/sandbox/assets/package-lock.json",
+						"type": "file"
+					},
+					"server/sandbox/assets/pi.ts": {
+						"path": "server/sandbox/assets/pi.ts",
+						"type": "file"
+					},
+					"server/sandbox/assets/stage-init.ts": {
+						"path": "server/sandbox/assets/stage-init.ts",
+						"type": "file"
+					},
+					"skills/*/": {
+						"path": "skills/*/SKILL.md",
+						"type": "glob"
+					},
+					"skills/": {
+						"path": "skills",
+						"type": "dir"
+					}
+				}
+			}
+		}
+	},
+	"discovery": {
+		"runners": [
+			"test",
+			"test:integration"
+		],
+		"exclude": [
+			"test/acceptance/**",
+			"test/fixtures/**"
+		]
+	},
+	"navigation": {
+		"required": [
+			".github",
+			".pi",
+			".pi/skills"
+		],
+		"exempt": []
+	},
+	"citations": {
+		"historical": [
+			"docs/handoff.md",
+			"docs/prototypes/**",
+			"research/**",
+			"test/acceptance/**",
+			"test/fixtures/**",
+			"tools/oxlint/anti-slop/**"
+		],
+		"pinnedDocuments": [
+			{
+				"path": "docs/operations/sandbox.md",
+				"revision": "f88069f",
+				"statement": "Repo paths are relative to `pi-herdr-factorio/` at `f88069f`."
+			}
+		]
+	}
+}
