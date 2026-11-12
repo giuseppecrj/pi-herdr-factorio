@@ -58,10 +58,10 @@ From a lane checkout with the original private run state retained:
 ```sh
 export GH_HOST=github.int.exe.xyz XDG_RUNTIME_DIR=/run/user/1000
 node docs/prototypes/heldout-ci/collect-probe.ts <state-dir> <run-id>
-node docs/prototypes/heldout-ci/repair-probe.ts <state-dir> <run-id>
+node .pi/skills/verify-factory/probes/heldout-ci/repair-probe.ts <state-dir> <run-id>
 ```
 
-The collection probe downloads the real receipt again through the repository-scoped artifact API and checks fresh GitHub run metadata against the private patch and suite. It does not dispatch or rewrite the run. The repair probe seeds the prior suite in a disposable base, sanitizes base plus prior patch, launches the real build-profile sandbox and removes its owned files and scope. Neither probe calls a model.
+The collection probe downloads the real receipt again through the repository-scoped artifact API and checks fresh GitHub run metadata against the private patch and suite. It does not dispatch or rewrite the run. The repair probe seeds the prior suite in a disposable base, sanitizes base plus prior patch, launches the real build-profile sandbox and removes its owned files and scope. Neither probe calls a model. The repair probe now lives in `.pi/skills/verify-factory/probes/heldout-ci/`, run by `features/validation.md`. The collection probe stays here as history.
 
 Drain the controller before deploying marker v2. Deployment is roll-forward only; legacy controllers reject v2. The parser still adopts old workflow digests and ignores legacy `validate.model` with a warning. New workflow settings omit that key.
 

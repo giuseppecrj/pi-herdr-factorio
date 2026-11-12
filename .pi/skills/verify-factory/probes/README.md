@@ -3,6 +3,7 @@
 This folder holds the probe programs that verify-factory feature recipes run against a lane's stored run on the VM. Each one checks an isolation boundary with a real sandbox and spends no model tokens. They began as prototypes under `docs/prototypes/`, where their evidence and history still live. `docs/history/path-map.md` records the move.
 
 | Probe | Run by | What it proves |
+| --- | --- | --- |
 | `acceptance-isolation/probe.ts` | `features/acceptance.md` | A build-profile sandbox launched after accept cannot reach the stored held-out suite or an earlier stage's records. |
 | `acceptance-isolation/self-test.mjs` | `test/artifacts.test.ts`, before the live probe | The acceptance probe's detector and PASS predicate reject each planted leak. |
 | `build-isolation/probe.ts` | `features/build.md` | A sandbox with the real build mount shape cannot reach held-out acceptance material. |
