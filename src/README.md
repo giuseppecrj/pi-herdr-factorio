@@ -18,7 +18,7 @@ Two matchers keep their own spelling on purpose. They match the gate container's
 
 ## Other folders
 
-`src/github/` talks to GitHub: `adapter.ts` is the tracker adapter, `tickets.ts` holds the tracker-neutral ticket types, and `exec.ts` holds the shared `Exec` process-runner type that replay and sandbox preflight also use for `git`. `src/contract/` holds what a run promises: the acceptance suite and stored artifacts. `src/candidate/` judges a candidate: build, review, validation, feedback, diagnosis and stage transitions. `src/views/` turns stored state into the owner feed, attention list, explanations and metrics. `src/maintenance/` holds scheduled and replay work: cadence audits, replay and scorers.
+`src/github/` talks to GitHub: `adapter.ts` is the tracker adapter, `tickets.ts` holds the tracker-neutral ticket types, and `exec.ts` holds the shared `Exec` process-runner type that replay and sandbox preflight also use for `git`. `src/contract/` holds what a run promises: the acceptance suite and stored artifacts. `src/candidate/` judges a candidate: build, review, validation, feedback, diagnosis and stage transitions. Its stored book has three homes. `state.ts` holds the book's types, limits, identity, freezing and receipt binding. `codec.ts` decodes the stored wire format and migrates older versions. `handoff.ts` holds the policy: transitions, accounting and certification. A new persisted field usually touches `state.ts` and `codec.ts` together. A new wire version goes in `codec.ts`. A new policy rule goes in `handoff.ts`. `src/views/` turns stored state into the owner feed, attention list, explanations and metrics. `src/maintenance/` holds scheduled and replay work: cadence audits, replay and scorers.
 
 ## Review seats
 
