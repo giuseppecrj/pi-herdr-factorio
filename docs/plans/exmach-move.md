@@ -112,14 +112,14 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 - [ ] Ship the `exmach` profile with `llm.int.<domain>`, edge `10.74.1.1`, GitHub host `factorio.int.<domain>` (the `factorio` integration that alone will carry `actions`, provisional until E1 and E2 land), and `anthropicStages` still set to accept and code-review only. `MV7` lifts it. Its base paths are OpenAI `/v1/` and Anthropic `/`, because Pi's Anthropic SDK appends `/v1/messages`. Its xAI path is `null`, and an xAI fallback is refused in workflow validation and in route construction.
 - [ ] Give the gateway a separate `--platform` descriptor. It rebuilds its expected upstreams from the built-in profile, so `productionDefect` still refuses a route table that differs. The table never authorizes itself.
 - [ ] Add a `platform` object with a stable digest to `status --json`, and record the controller's startup profile in its status snapshot.
-- [ ] Replace every hard-coded site. These are `host/gateway/routes.ts:170`, `:176`, `:250-258` and `:518`, `src/trust/markers.ts:14-15`, `src/github/publish.ts:44-45`, `src/github/adapter.ts:1179`, `host/cli/metrics.ts:285`, `host/controller/candidate-port.ts:1259`, `src/trust/admission.ts:52-54` and the `anthropicRule` text in `src/config/parse.ts`.
+- [ ] Replace every hard-coded site. These are `host/gateway/routes.ts:170`, `:176`, `:250-258` and `:518`, `src/trust/markers.ts:14-15`, `src/github/publish.ts:44-45`, `src/github/adapter.ts:1179`, `7a9744d:server/cli.ts:1053`, `host/controller/candidate-port.ts:1259`, `src/trust/admission.ts:52-54` and the `anthropicRule` text in `src/config/parse.ts`.
 - [ ] Select the profile from `FACTORY_PLATFORM` and an optional root-owned `/etc/factory/platform.json`. The file holds only the selector, controller login, app slug, bot email and an optional repository list. With neither source, select `exe-dev`. Both sources must agree. The `exmach` profile carries the identity exmach published in giuseppecrj/exmach#94, which is login `nubl-agent[bot]`, app slug `nubl-agent` and email `353429311+nubl-agent[bot]@users.noreply.github.com`. The file may override all three together, and may set `ghHost` to one label under `int.<domain>`. Any malformed source fails closed and never falls back to `exe-dev`. The walkthrough is in `../pi-herdr-factorio-trails/MV1/walkthrough/explain.md`.
 
 **You see.**
 
 - [ ] With no profile set, `status --json` reports `platform.name` as `exe-dev` and every route matches trunk.
 - [ ] With `FACTORY_PLATFORM=exmach:` and no domain, startup exits 2 with `event=platform_invalid` and a named reason. A built-in selector always generates its own forbidden domains, so `own_domain_not_forbidden` is proven by a unit test on a malformed resolved profile, not live.
-- [ ] `rg 'exe\.xyz|exe-dev-github-integration|169\.254\.169\.254|nublai/pi-herdr-factorio' src server extension` finds only `src/trust/platform.ts`, the echo fixture, the generic refused ranges in `host/gateway/gateway.ts`, and the MV3 and MV7 files `host/install/provision.sh`, `host/install/factory.service` and `host/sandbox/anthropic-limits.ts`.
+- [ ] `rg 'exe\.xyz|exe-dev-github-integration|169\.254\.169\.254|nublai/pi-herdr-factorio' src host extension` finds only `src/trust/platform.ts`, the echo fixture, the generic refused ranges in `host/gateway/gateway.ts`, and the MV3 and MV7 files `host/install/provision.sh`, `host/install/factory.service` and `src/core/models.ts`.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -439,7 +439,7 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 **Files.**
 
 - [ ] Edit `src/trust/platform.ts` to widen `anthropicStages` in the `exmach` profile.
-- [ ] Edit `host/sandbox/anthropic-limits.ts` against exmach's `GET /v1/models`.
+- [ ] Edit `src/core/models.ts` against exmach's `GET /v1/models`.
 - [ ] Edit `test/platform.test.ts`, the workflow tests and `docs/operations/platform.md`.
 - [ ] Edit `docs/decisions.tsv` with one row by `log.sh`.
 
