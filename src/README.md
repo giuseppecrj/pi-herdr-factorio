@@ -12,6 +12,8 @@ Host work stays in `server/`. That means processes, sandboxes, the gateway, gate
 
 `protected-paths.ts` owns the control-plane, acceptance-suite and feedback-file names. Callers keep their own normalization, case handling and authority. A read filter, a replacement-test check and a patch-write check do not grant the same access.
 
+Two matchers keep their own spelling on purpose. They match the gate container's absolute paths under `/w/test/acceptance/`, which no repository-relative constant describes. They are the held-out file check in `server/gates.ts` and the draft reporter in `server/gates/draft-reporter.mjs`. Every file under `src/trust/` gets the `ultrareview` seat.
+
 ## Files by planned owner
 
 `docs/plans/codebase-layout.md` moves these files into the owner folders below. Until a file moves, it stays at the path shown. Do not create a planned owner folder before the PR that moves files into it.

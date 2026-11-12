@@ -1178,7 +1178,8 @@ function heldoutOf(
 		!directory ||
 		!digest ||
 		!isDigest(digest) ||
-		!/^test\/acceptance\/[a-zA-Z0-9_-]+$/.test(directory) ||
+		!directory.startsWith(ACCEPTANCE_SUITE_PREFIX) ||
+		!/^[a-zA-Z0-9_-]+$/.test(directory.slice(ACCEPTANCE_SUITE_PREFIX.length)) ||
 		!existsSync(join(tree, directory, "checks"))
 	)
 		throw new Error("heldout_digest_mismatch");
