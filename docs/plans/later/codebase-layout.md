@@ -880,13 +880,51 @@ Appendix C records the template adaptations. Ten lane boxes remain per PR, but a
 - [ ] Confirm every external action has a grant and result. Archive disposable evidence before authorized VM/integration/repository cleanup. Leave nubl-factory empty at program closure.
 - [ ] Deliver the autopilot-stack report with PR URLs, verified heads, owner merge SHAs, evidence, adaptations, and remaining work. Distinguish the completed layout program from pending production operation.
 
+### Completed PR evidence
+
+L15 moved this plan to `docs/plans/later/` when it closed the program. Each row names the pull request and the squash commit that `git log origin/main` shows for it. The squash commit is the revision that `docs/history/path-map.md` binds each move to. Boxes above stay unchecked until the coordinator checks them against their artifacts.
+
+| Plan PR | Pull request | Squash commit on main | Result |
+| --- | --- | --- | --- |
+| Plan | #745 | `f0c048b6d5741edf1748c1f91d69da70153ee379` | This plan, option C. |
+| G0 | #750 | `712c8c86c3119fe682a0ea6b2281b707f7820846` | The trusted gate baseline passes in the pinned image. A prerequisite outside the L numbering. |
+| L00 | #746 | `3a0de21004a30de910e6295f9549edbdc5aa1955` | Navigation READMEs and the HEAD-only layout and decisions guards. |
+| L01 | #747 | `61002856224a357059ab661b6bba101d3ac83472` | Agent instructions and verification procedures. |
+| L02 | #748 | `89ec2e4af191596284c4229b5495426da7aa6a78` | Maintained probes and heredoc TypeScript in checked code. |
+| L03 | #749 | `a7d38d6147fdb43ffa0ac024faf0be698cce2fde` | Portable core in `src/core`. |
+| L04 | #752 | `40040979fdaaff1d7c851541f378e3909f10d239` | One home for protected paths and stage vocabulary. |
+| L05 | #753 | `380432b91b3286b41746a75f27b62c2cbf2abbcb` | Host collection separated from `src`, package closed. |
+| L06 | #754 | `5494e2f576898e6173af64336f5a23383a03fdbc` | Intact `src` files in domain folders. |
+| L07 | #757 | `344f2f96e3ad1a3108c3a644b79aad14c516e4cd` | Candidate state and codec moved and split. |
+| L08 | #756 | `67f8b3a0d1dc51b95d000ad561a20933763eb704` | Configuration and contract knowledge moved and split. |
+| L09 | #755 | `4fac83367bda33eb819122ee0ee4708fb38f5cd9` | Ledger storage and publication moved and split. |
+| L10 | #759 | `ce47b745f15080879a8a978b6d6dddb8ecdafa22` | Scheduling moved and split by owned state. |
+| L11 | #758 | `a1a68b855ed3817e2fe8cbc2004b6b4523ad1506` | Host controller split. |
+| L12 | #760 | `7a9744d52053b2b69c81119091ebc62516b517b4` | Stage execution and receipt handling split. |
+| L13 | #761 | `8f7f1ff036ab7412c66806420d6119844f36568e` | `server` renamed to `host`, CLI and gates moved. |
+| L14 | #762 | Not on main when L15 was written. The coordinator records its squash commit when it rebases L15. | Tests mirror the source layout. |
+| L15 | This pull request | Set when the owner lands it. | Docs moved by authority and freshness, this plan closed. |
+
+These lanes are pending owner action, not passed. The agent host's exe.dev key cannot add GitHub integrations, so no agent can attach the fixture repository to a disposable VM.
+
+- [ ] L13 lane 7, the fresh new-layout install on a clean disposable VM.
+- [ ] L13 lane 8, the old-layout install, old-bootstrap refusal, and new-bootstrap upgrade on a second disposable VM.
+- [ ] L13 lane 10, the owner-triggered real `ci.yml` run on main with a same-layout fixture candidate.
+- [ ] L15 lane 6, the fresh held install at the L15 head-derived fixture revision, and the perf probe on that disposable host.
+- [ ] L15's post-merge fresh held install at final main and the new-main gates on that VM.
+
 ### Post-program owner checklist, not a PR
+
+Every item below is the owner's. None is a condition of any L PR, and none is checked by the program.
+
+- [ ] Trigger the real `ci.yml` on product main with a same-layout fixture candidate and a valid nonce, as L13 lane 10 specifies. Gates and the exact-SHA receipt must pass; the report job's human-actor refusal is expected.
 
 - [ ] After the whole program lands and final-main qualification passes, the owner performs a fresh held install on empty `nubl-factory` at the first production commit that follows the program. Use the new pinned install path and runbook. If that commit changes code beyond the qualified tree, verify its affected behavior before dispatch. Record installed SHA, fresh readiness, bundle digest, sandbox availability, and locally_disabled status.
 - [ ] The Shep owner installs or updates the independently reviewed bridge, points it at the new owner-feed command, and confirms feed polling. This repository's agents do not deploy or restart Shep.
 - [ ] Complete the `pi-factorio` drain under #712 and the production switch/retirement under #734 with their own grants. Preserve unfinished-run evidence. Do not upgrade pi-factorio or assume a hold alone drains it.
 - [ ] Obtain the owner's explicit real-dispatch decision under #735 after the fresh install, bridge, drain, and switch are proven. Only the owner removes the local hold or changes factory:enabled. Program completion grants neither action.
 - [ ] Under a separate fixture/spend grant, run the first real fixture through actual provider stages, exact-head CI, and expected handoff. Keep full existing allowances, close the fixture, and preserve receipts. This proves production operation after closure, not a retrospective prerequisite for L15.
+- [ ] After archiving their receipts to the private trail, delete the two disposable VMs `layout-upgrade-test` and `layout-fresh-test` and the fixture repository `nublai/pi-herdr-factorio-layout-fixture` under a cleanup grant.
 
 ## Appendix A. Prototype evidence
 
@@ -1166,9 +1204,9 @@ Keep briefs, move maps, configuration-only fixture patches, commands, raw result
 - Create-verification-skill and maintain-verification-skill govern L01/L02. Create-formal-verification-skill governs only the bounded wrapper in L01.
 - The principles are model-the-domain, minimize-reader-load, migrate-callers-then-delete-legacy-apis, sequence-verifiable-units, encode-lessons-in-structure, subtract-before-you-add, prove-it-works, and test-behavior-not-implementation under `<pstack>/skills/principle-<name>/SKILL.md`. Apply them through named owners, no pass-through layers, atomic caller migration, guards before moves, fewer-file stop outcomes, and observable behavior pins.
 
-At authoring time run these commands. Do not edit factory-v1 in this fix round.
+After an edit, run these commands at the paths L15 moved the plans to. This plan prints `16 PR sections, 0 problems` and factory-v1 prints `22 PR sections, 0 problems`.
 
 ```sh
-node <pstack>/skills/poteto-mode/scripts/check-plan.mjs docs/plans/codebase-layout.md
-node <pstack>/skills/poteto-mode/scripts/check-plan.mjs docs/plans/factory-v1.md
+node <pstack>/skills/poteto-mode/scripts/check-plan.mjs docs/plans/later/codebase-layout.md
+node <pstack>/skills/poteto-mode/scripts/check-plan.mjs docs/plans/active/factory-v1.md
 ```

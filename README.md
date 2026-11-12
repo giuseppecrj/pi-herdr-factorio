@@ -28,4 +28,4 @@ Each folder has a `README.md` that says what belongs in it and where new files g
 
 ## Records
 
-`docs/plans/factory-v1.md` tracks what is built and what remains, and `docs/decisions.tsv` records every decision and verdict. `docs/operations/` documents how to run each part. `research/SYNTHESIS.md` is the original design research. `research/reports/` holds the evidence behind it. Upstream skill captures stay local; `research/PROVENANCE.md` records their URLs, pinned SHAs and licenses, because several upstreams carry no license.
+`docs/plans/active/factory-v1.md` tracks what is built and what remains, and `docs/decisions.tsv` records every decision and verdict. `docs/operations/` documents how to run each part. `research/SYNTHESIS.md` is the original design research. `research/reports/` holds the evidence behind it. Upstream skill captures stay local; `research/PROVENANCE.md` records their URLs, pinned SHAs and licenses, because several upstreams carry no license.

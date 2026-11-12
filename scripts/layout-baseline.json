@@ -4,11 +4,11 @@
 	"imports": {
 		"exclude": [
 			"test/acceptance/**",
-			"docs/prototypes/anthropic-route/**",
-			"docs/prototypes/ledger-branch/**",
-			"docs/prototypes/vm-sandbox/**",
-			"docs/prototypes/heldout-ci/collect-probe.ts",
-			"docs/prototypes/trusted-ci/**"
+			"docs/history/prototypes/anthropic-route/**",
+			"docs/history/prototypes/ledger-branch/**",
+			"docs/history/prototypes/vm-sandbox/**",
+			"docs/history/prototypes/heldout-ci/collect-probe.ts",
+			"docs/history/prototypes/trusted-ci/**"
 		],
 		"exceptions": []
 	},
@@ -2953,7 +2953,7 @@
 			"kind": "paths",
 			"reader": "host/gates/materialize.ts",
 			"tokens": {
-				"export const SOURCE = [ \"src\", \"extension\", \"host\", \"skills\", \"scripts\", \".pi/skills\", \"docs/statecharts\", ];": 1
+				"export const SOURCE = [ \"src\", \"extension\", \"host\", \"skills\", \"scripts\", \".pi/skills\", \"docs/models\", ];": 1
 			},
 			"targets": [
 				{
@@ -2981,7 +2981,7 @@
 					"type": "dir"
 				},
 				{
-					"path": "docs/statecharts",
+					"path": "docs/models",
 					"type": "dir"
 				}
 			]
@@ -3133,7 +3133,7 @@
 		{
 			"id": "formal-test-selection",
 			"kind": "paths",
-			"reader": "docs/statecharts/journey/replay-merge-mid-repair.ts",
+			"reader": "docs/models/journey/replay-merge-mid-repair.ts",
 			"tokens": {
 				"new URL(`../../../${path}`, import.meta.url)": 1
 			},
@@ -4766,11 +4766,11 @@
 		"exclude": [
 			"test/acceptance/**",
 			"test/**",
-			"docs/prototypes/anthropic-route/**",
-			"docs/prototypes/ledger-branch/**",
-			"docs/prototypes/vm-sandbox/**",
-			"docs/prototypes/heldout-ci/collect-probe.ts",
-			"docs/prototypes/trusted-ci/**",
+			"docs/history/prototypes/anthropic-route/**",
+			"docs/history/prototypes/ledger-branch/**",
+			"docs/history/prototypes/vm-sandbox/**",
+			"docs/history/prototypes/heldout-ci/collect-probe.ts",
+			"docs/history/prototypes/trusted-ci/**",
 			"test/fixtures/**"
 		],
 		"allow": [
@@ -5158,8 +5158,8 @@
 	},
 	"citations": {
 		"historical": [
-			"docs/handoff.md",
-			"docs/prototypes/**",
+			"docs/history/handoff.md",
+			"docs/history/prototypes/**",
 			"research/**",
 			"test/acceptance/**",
 			"test/fixtures/**",

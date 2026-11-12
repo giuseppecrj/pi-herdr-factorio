@@ -5,7 +5,7 @@ description: Verify pi-herdr-factorio on its real surfaces. Use for authorized V
 
 # Verify pi-herdr-factorio
 
-Use this skill for authorized factory checks, not permission to run them. Read [the active layout program](../../../docs/plans/codebase-layout.md) before any drive. Dispatch stays paused throughout that program. `pi-factorio` is retiring under #712 and #734. `nubl-factory` stays empty until the owner installs it after the program.
+Use this skill for authorized factory checks, not permission to run them. Read [the active layout program](../../../docs/plans/later/codebase-layout.md) before any drive. Dispatch stays paused throughout that program. `pi-factorio` is retiring under #712 and #734. `nubl-factory` stays empty until the owner installs it after the program.
 
 The factory is a Pi package plus a controller. Drive these interfaces only under the task's grants:
 

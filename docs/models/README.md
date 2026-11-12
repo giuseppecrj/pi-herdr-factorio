@@ -278,7 +278,7 @@ The presentation configs select a successful single-generation path with no refr
 The runtime correspondence entry point is a named-test runner, not a generic TLC decoder:
 
 ```sh
-node --experimental-strip-types docs/statecharts/journey/replay-merge-mid-repair.ts
+node --experimental-strip-types docs/models/journey/replay-merge-mid-repair.ts
 ```
 
 It now requires at least 40 selected tests, all passing with zero skips, including all five F10 replays, six-generation, real Orchestrator restart and actual promotion cases. The historical F09a fixed-revision selection ran 33 tests, including the seven terminal-drain regressions. At the preceding revision, a six-entry TLC witness matched 14 actual intermediate candidate states through the exported reducer and public `advance`. Five isolated TypeScript mutations failed behavior assertions: reset attempts on refresh, accept a stale generation, lower a usage floor, finish before stop and promote from an unexpected predecessor. Restoration passed. Those retained receipts are not new fixed-model trace or mutation qualification. Unchanged TLC alone is not evidence against mutated TypeScript.
@@ -352,8 +352,8 @@ The following expands the exact qualification command for every row above. Each 
 ```sh
 set -eu
 CHECKER=/home/g/.pi/agent/npm/node_modules/tla-ts/dist/cli.js
-J=docs/statecharts/journey
-C=docs/statecharts/controller
+J=docs/models/journey
+C=docs/models/controller
 OUT=$(mktemp -d)
 run() {
   name=$1 seconds=$2 spec=$3 cfg=$4 expected=$5

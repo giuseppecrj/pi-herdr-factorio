@@ -12,7 +12,7 @@
 
 Use `host/install/install-exe-dev.sh` and [the installer runbook](../../../../docs/operations/install-exe-dev.md). Read the script at the chosen revision before running it. This recipe uses a disposable exe.dev VM named `layout-install-test`, not a production host.
 
-The layout program requires separate grants for the fixture repository, its two-field configuration derivation, integration, VM lifecycle, install, upgrade, recovery, and cleanup. See [the fixture prerequisites](../../../../docs/plans/codebase-layout.md#disposable-fixture-setup-is-a-real-prerequisite). At this base, `--repo` alone cannot make a fixture installation work. The derived revision must allow the fixture repository in the platform defaults and its trusted main workflow. Record product and fixture SHAs and prove all other blobs identical.
+The layout program requires separate grants for the fixture repository, its two-field configuration derivation, integration, VM lifecycle, install, upgrade, recovery, and cleanup. See [the fixture prerequisites](../../../../docs/plans/later/codebase-layout.md#disposable-fixture-setup-is-a-real-prerequisite). At this base, `--repo` alone cannot make a fixture installation work. The derived revision must allow the fixture repository in the platform defaults and its trusted main workflow. Record product and fixture SHAs and prove all other blobs identical.
 
 Keep `nubl-factory` empty throughout L00 to L15. Reads there begin only after the owner's post-program fresh held install. `pi-factorio` is retiring and is never an install or upgrade target for these lanes.
 

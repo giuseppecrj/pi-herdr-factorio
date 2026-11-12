@@ -249,8 +249,8 @@ test("merged tree takes maintained skills and formal TypeScript, never private P
 	f.put(probe, "main probe\n");
 	f.put(".pi/skills/verify-factory/probes/p/README.md", "main readme\n");
 	f.put(".pi/skills/verify-factory/scripts/gone.ts", "main\n");
-	f.put("docs/statecharts/journey/view.ts", "main view\n");
-	f.put("docs/statecharts/journey/Journey.tla", "main model\n");
+	f.put("docs/models/journey/view.ts", "main view\n");
+	f.put("docs/models/journey/Journey.tla", "main model\n");
 	f.put("test/acceptance/1/checks/a.test.ts", "main acceptance\n");
 	const gateSha = f.commit();
 
@@ -258,7 +258,7 @@ test("merged tree takes maintained skills and formal TypeScript, never private P
 	f.put(".pi/skills/verify-factory/probes/p/README.md", "candidate readme\n");
 	rmSync(join(f.root, ".pi/skills/verify-factory/scripts/gone.ts"));
 	f.put(".pi/skills/verify-factory/biome.json", "{}");
-	f.put("docs/statecharts/journey/view.ts", "candidate view\n");
+	f.put("docs/models/journey/view.ts", "candidate view\n");
 	f.put(".pi/daily-log/2026-11-12.md", "private log\n");
 	f.put(".pi/loops/loop.json", "{}");
 	f.put(".pi/sessions/s.jsonl", "{}\n");
@@ -284,12 +284,12 @@ test("merged tree takes maintained skills and formal TypeScript, never private P
 	);
 
 	assert.equal(
-		readFileSync(join(dest, "docs/statecharts/journey/view.ts"), "utf8"),
+		readFileSync(join(dest, "docs/models/journey/view.ts"), "utf8"),
 		"candidate view\n",
 	);
 
 	assert.equal(
-		readFileSync(join(dest, "docs/statecharts/journey/Journey.tla"), "utf8"),
+		readFileSync(join(dest, "docs/models/journey/Journey.tla"), "utf8"),
 		"main model\n",
 	);
 
@@ -703,7 +703,7 @@ test("trusted lint and format check the roots npm run check does, without checki
 
 	const lintRoots = roots(pkg.scripts.lint, "oxlint");
 	assert.ok(lintRoots.includes(".pi/skills"));
-	assert.ok(lintRoots.includes("docs/statecharts"));
+	assert.ok(lintRoots.includes("docs/models"));
 	assert.deepEqual(argv("lint").slice(-lintRoots.length), lintRoots);
 
 	assert.deepEqual(

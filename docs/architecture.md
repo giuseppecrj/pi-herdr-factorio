@@ -1,6 +1,6 @@
 # Factory design
 
-This explanation records the v1 design and later owner decisions. F09a implements local human handoff; main-backed reporter/P4, production protection, real owner actions, and live/performance qualification remain pending. Ledger, PR feedback, cadence, metrics, and Linear below remain later plan units. See [the implementation plan](plans/factory-v1.md) for gates and [the operator guide](operations/human-review.md) for the handoff procedure. The original research is in `research/SYNTHESIS.md` and `research/reports/`.
+This explanation records the v1 design and later owner decisions. F09a implements local human handoff; main-backed reporter/P4, production protection, real owner actions, and live/performance qualification remain pending. Ledger, PR feedback, cadence, metrics, and Linear below remain later plan units. See [the implementation plan](plans/active/factory-v1.md) for gates and [the operator guide](operations/human-review.md) for the handoff procedure. The original research is in `research/SYNTHESIS.md` and `research/reports/`.
 
 - GitHub Issues first, Linear next.
 - v1 ends at Human Review: the factory opens a PR and a human merges it. Full autonomy comes later by loosening the checkpoint policy, not by rebuilding.
@@ -150,7 +150,7 @@ Each stage runs Pi in RPC mode inside a bwrap sandbox on the VM, in its own `sys
 - **Network.** The sandbox has no network. Its only egress is a host-side gateway that rebuilds every request for a fixed route: the model integration and `registry.npmjs.org`.
 - **Credentials.** None. The model integration injects its key at exe.dev's edge, and the gateway strips any credential header the sandbox sends.
 - **GitHub stays out of reach.** exe.dev integrations answer any process on the VM, so the sandbox has no route of its own, and the gateway never builds a request for a GitHub host. It allows only the model integration and the npm registry. Otherwise an agent could use `gh` itself.
-- **Fan-out.** Herdr runs headless inside the sandbox for pstack's fan-out skills. That was verified on a GitHub runner in `docs/prototypes/herdr-on-runner.md`. The VM is the same pattern with more room.
+- **Fan-out.** Herdr runs headless inside the sandbox for pstack's fan-out skills. That was verified on a GitHub runner in `docs/history/prototypes/herdr-on-runner.md`. The VM is the same pattern with more room.
 
 A per-issue directory is not a security boundary on its own. Symphony says so too, and leaves it to the host. The sandbox is our boundary.
 
@@ -196,7 +196,7 @@ Riskiest unknowns first. Each unit ends in a check before the next starts.
 | # | Unit | Check |
 | --- | --- | --- |
 | 0 | Model access from a hosted runner over the tailnet | VERIFIED: run 40767252647 |
-| 1 | Herdr headless on a Linux runner | VERIFIED: run 40768344796 (`docs/prototypes/herdr-on-runner.md`) |
+| 1 | Herdr headless on a Linux runner | VERIFIED: run 40768344796 (`docs/history/prototypes/herdr-on-runner.md`) |
 | 2 | Package skeleton and pure controller core | VERIFIED: `npm run check` 60/60, commit `db91d1a` |
 | 3 | VM bring-up: Pi, Herdr, `gh` and models through exe.dev integrations | VERIFIED: `gh` reads and writes (labels created); `pi -p` passes on anthropic/claude-sonnet-5-5, anthropic/claude-haiku-4-5, openai/gpt-5.6-luna, openai/gpt-6-astra |
 | 4 | Orchestrator: Symphony claims, reconcile tick, retries, stall; GitHub adapter; admit; kill switch; marker recovery | tests 3, 4 and 8 of the definition of done |

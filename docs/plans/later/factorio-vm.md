@@ -69,7 +69,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 - [ ] Run a manual diff cleanup pass before each commit and `/skill:no-comments` before review. Retain required `SAFETY:` comments. Apply technical-writing and unslop to every runbook.
 - [ ] Triage every Bugbot and security-reviewer comment per `<pstack>/skills/poteto-mode/references/bugbot-triage.md`.
 - [ ] Rebase onto current trunk, or the recorded stack parent, before the code-ready report and babysit. Keep that merge base in fix rounds. Rebase again only at merge prep, on a `git merge-tree` conflict with trunk, on a CI failure that comes from a change on trunk, or when a known concurrent change to the same files lands.
-- [ ] Run the plan checker on this plan after an edit. Leave `docs/plans/factory-v1.md` unchanged by this program unless the owner grants a separate amendment.
+- [ ] Run the plan checker on this plan after an edit. Leave `docs/plans/active/factory-v1.md` unchanged by this program unless the owner grants a separate amendment.
 
 ### Verdict and merge, for every PR
 
@@ -709,7 +709,7 @@ For orchestration v1, use Shep's fixed-profile pi session with only factory exte
 
 - Read the supplied host facts and Amendment 1 at `ms-a2-vm/facts.md` in the private trails checkout (`../pi-herdr-factorio-trails/`) before VM2. Keep their host observations and shared-user design. Use this plan's later owner sequence and current main instead of the stale production and provisioning statements.
 - Read `nublai/root`'s `.pi/plan/research/orchestration.md` for the coordinator's orchestration v1 decision. Track [#738](https://github.com/nublai/pi-herdr-factorio/issues/738) for bot refusal and creation-time labels, [#739](https://github.com/nublai/pi-herdr-factorio/issues/739) for intake references and multi-repo feed reads, and [#740](https://github.com/nublai/pi-herdr-factorio/issues/740) for the v1.1 questions link.
-- Read `docs/plans/factory-v1.md`, `docs/decisions.tsv`, and `docs/plans/exmach-move.md` for program limits, authority history, and the reusable MV work. This plan does not resume the parked exmach program.
+- Read `docs/plans/active/factory-v1.md`, `docs/decisions.tsv`, and `docs/plans/later/exmach-move.md` for program limits, authority history, and the reusable MV work. This plan does not resume the parked exmach program.
 - Read `docs/operations/install-exe-dev.md`, `docs/operations/platform.md`, `docs/operations/sandbox.md`, `docs/operations/owner-feed.md`, `docs/operations/backup.md`, and `.pi/skills/verify-factory/SKILL.md` before changing their contracts. Check active repository and history behavior against `src/trust/platform.ts`, and reviewer selection against `.github/factory/WORKFLOW.md`.
 - Read `git show origin/mv4-drain-foreign-markers:docs/operations/drain.md` for VM6. Read main's `host/install/install-exe-dev.sh`, `host/install/provision.sh`, `host/install/factory.service`, `test/install-exe-dev.test.ts`, and `test/provision.test.ts` for VM5. Read `origin/mv4b-ci-bot`'s workflow and reporter-test patch for VM7.
 - VM2, VM3, VM4, and VM5 get the how skill, `<pstack>/skills/how/SKILL.md`. Use `<pstack>/skills/interrogate/SKILL.md` only for the owner choices D1 through D7, not routine implementation details.

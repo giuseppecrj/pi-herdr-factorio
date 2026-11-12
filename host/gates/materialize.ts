@@ -60,7 +60,7 @@ export const SOURCE = [
 	"skills",
 	"scripts",
 	".pi/skills",
-	"docs/statecharts",
+	"docs/models",
 ];
 
 export const SHA = /^[a-f0-9]{40}$/;

@@ -34,7 +34,7 @@ curl http://127.0.0.1:<port>/owner-feed.json
 
 The development-machine figures ran with Node 26.13.0 on the seven-run state that `ownerState` builds in `test/fixtures/owner-feed/state.ts`. The ten CLI reads took 321, 277, 279, 280, 277, 278, 278, 280, 278 and 278 ms, timed as wall clock around the whole command. A bare `node -e 0` takes 13 ms, so nearly all of the 278 ms is loading the CLI's modules. The ten route reads were `curl` totals against a viewer already running.
 
-The VM figure comes from the independent verifier's run of ten CLI reads on the `pi-factorio` VM on 2026-11-10. Three more sets of ten had medians of 694, 696.5 and 728 ms. **Plan against the VM figure, not the development-machine one.** The VM reads about 2.2 times slower. Production state has more runs than the fixture. The F09c performance probe in `docs/plans/factory-v1.md` found feed work under its 500 ms limit on a copy of production state, and it excluded Node start-up from that limit.
+The VM figure comes from the independent verifier's run of ten CLI reads on the `pi-factorio` VM on 2026-11-10. Three more sets of ten had medians of 694, 696.5 and 728 ms. **Plan against the VM figure, not the development-machine one.** The VM reads about 2.2 times slower. Production state has more runs than the fixture. The F09c performance probe in `docs/plans/active/factory-v1.md` found feed work under its 500 ms limit on a copy of production state, and it excluded Node start-up from that limit.
 
 **Recommendation.** Read the CLI. It needs no second process. On exmach the viewer stays on loopback, so the route only helps when someone already runs a viewer.
 

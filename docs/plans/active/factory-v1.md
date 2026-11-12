@@ -43,7 +43,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 - [ ] Give each PR one owner role with the full lifecycle that `autopilot-full` names. The root coordinated merges through F08. From F09a onward, the owner alone merges. Launch each round as a fresh bare leaf with `fork: false`, bounded files, explicit model and thinking, verification, and commit policy. Keep one retained checkout and one canonical branch per owner.
 - [ ] Follow this dependency graph. Branch dependent work from `main` after its parent merges, or stack it on the parent's committed tip while the parent is still in review. Record the parent SHA in each brief.
   - [ ] Start `F04a` from `main`. Follow `F04a -> F04b -> F04c -> F05 -> F06a -> F06b -> F07a -> F07b -> F07c -> F07d -> F08 -> F09a -> F10b -> F09b -> F10c -> F10 -> F12a -> F09c -> F11 -> F12 -> F13`.
-  - [ ] Run `F09d` after `F09c` as optional docs-only work. It writes only `docs/prototypes/ios-app/`, so it may run beside later code units, and no unit depends on it.
+  - [ ] Run `F09d` after `F09c` as optional docs-only work. It writes only `docs/history/prototypes/ios-app/`, so it may run beside later code units, and no unit depends on it.
   - [ ] Keep this chain serial for code writes. It changes shared controller contracts and tests. Parallelize read-only verification with separate fixture issues, not dependent implementation.
   - [ ] Treat `F04a`'s first main-owned configuration and `F07b`'s first main-owned CI workflow as bootstrap gates. Prove parsing and execution locally first. Complete their main-backed live checks after those trusted files land on `main`, before dependent dispatch or publication. Record the bootstrap exceptions in Appendix C rather than claiming clean full verdicts early.
 - [ ] Hold the file boundaries in each PR's **Files** block. Treat listed directories as that PR's only directory-wide allowances. Obtain a revised scope before editing another path. New prototype receipts belong only in that PR's named documentation directory.
@@ -144,7 +144,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Files.**
 
-- [ ] Create `src/github/adapter.ts`, `src/trust/admission.ts`, `test/github-adapter.test.ts`, `test/admission.test.ts`, and `docs/prototypes/github-polling/`.
+- [ ] Create `src/github/adapter.ts`, `src/trust/admission.ts`, `test/github-adapter.test.ts`, `test/admission.test.ts`, and `docs/history/prototypes/github-polling/`.
 - [ ] Edit `src/github/tickets.ts`, `src/trust/policy.ts`, `test/fake-ticket-adapter.ts`, `test/pipeline.test.ts`, and `host/cli/index.ts` for polling contracts and a bounded admission command.
 
 **Build.**
@@ -198,7 +198,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Files.**
 
-- [ ] Create `src/controller/orchestrator.ts`, `src/trust/markers.ts`, `server/controller.ts`, `host/install/factory.service`, `test/orchestrator.test.ts`, `test/markers.test.ts`, and `docs/prototypes/restart-recovery/`.
+- [ ] Create `src/controller/orchestrator.ts`, `src/trust/markers.ts`, `server/controller.ts`, `host/install/factory.service`, `test/orchestrator.test.ts`, `test/markers.test.ts`, and `docs/history/prototypes/restart-recovery/`.
 - [ ] Edit `src/run.ts`, `src/github/adapter.ts`, `host/cli/index.ts`, `extension/index.ts`, `test/extension.test.ts`, `test/fake-ticket-adapter.ts`, and `docs/operations/factory-cli.md` for durable run metadata and command wiring.
 
 **Build.**
@@ -252,8 +252,8 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Files.**
 
-- [ ] Create `server/sandbox.ts`, `host/sandbox/` (including the pinned `host/bundle/assets/package.json` and `package-lock.json`), `test/sandbox.test.ts` and `test/sandbox/`, `docs/prototypes/vm-sandbox/`, and `docs/operations/sandbox.md`.
-- [ ] Edit `src/controller/orchestrator.ts`, `src/trust/markers.ts`, `host/cli/index.ts`, `server/controller.ts`, `host/install/provision.sh`, `host/install/factory.service`, `src/candidate/stages.ts`, `src/config/{schema,parse,load,views}.ts`, `extension/index.ts` only if the profile table's API changes, their tests (`test/orchestrator.test.ts`, `test/markers.test.ts`, `test/stages.test.ts`, `test/workflow.test.ts`), `docs/operations/factory-cli.md`, `docs/design.md`, and this F05 section, for stage execution and truthful access profiles.
+- [ ] Create `server/sandbox.ts`, `host/sandbox/` (including the pinned `host/bundle/assets/package.json` and `package-lock.json`), `test/sandbox.test.ts` and `test/sandbox/`, `docs/history/prototypes/vm-sandbox/`, and `docs/operations/sandbox.md`.
+- [ ] Edit `src/controller/orchestrator.ts`, `src/trust/markers.ts`, `host/cli/index.ts`, `server/controller.ts`, `host/install/provision.sh`, `host/install/factory.service`, `src/candidate/stages.ts`, `src/config/{schema,parse,load,views}.ts`, `extension/index.ts` only if the profile table's API changes, their tests (`test/orchestrator.test.ts`, `test/markers.test.ts`, `test/stages.test.ts`, `test/workflow.test.ts`), `docs/operations/factory-cli.md`, `docs/architecture.md`, and this F05 section, for stage execution and truthful access profiles.
 
 **Build.**
 
@@ -368,10 +368,10 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Files.**
 
-- [ ] Create `src/contract/acceptance.ts`, `src/contract/artifacts.ts`, `test/accept.test.ts`, `test/artifacts.test.ts`, `skills/acceptance/`, and `docs/prototypes/acceptance-isolation/`.
+- [ ] Create `src/contract/acceptance.ts`, `src/contract/artifacts.ts`, `test/accept.test.ts`, `test/artifacts.test.ts`, `skills/acceptance/`, and `docs/history/prototypes/acceptance-isolation/`.
 - [ ] Edit `server/controller.ts` and `skills/README.md` for acceptance-only artifact access. Edit `server/sandbox.ts` for the shared sandbox launch helper and recovery of acceptance's recorded model identity, with tests in `test/sandbox/**`. `host/install/provision.sh` needs no change, because the existing `skills/*/` loop bundles the new skill.
 - [ ] Edit `src/controller/orchestrator.ts` for the specify-to-accept transition, accept inputs, storage, recovery and the summary, and `src/contract/render.ts` for the shared acceptance summary renderer and comment key. The owner's F06b brief widened the list to these.
-- [ ] Edit `test/orchestrator.test.ts`, `docs/operations/sandbox.md`, `docs/operations/factory-cli.md`, `.pi/skills/verify-factory/**`, and this Files block in `docs/plans/factory-v1.md`.
+- [ ] Edit `test/orchestrator.test.ts`, `docs/operations/sandbox.md`, `docs/operations/factory-cli.md`, `.pi/skills/verify-factory/**`, and this Files block in `docs/plans/active/factory-v1.md`.
 
 **Build.**
 
@@ -423,7 +423,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Files.**
 
-- [ ] Create `src/candidate/build.ts`, `test/build.test.ts`, `skills/build/`, `test/fixtures/build/`, and `docs/prototypes/build-isolation/`.
+- [ ] Create `src/candidate/build.ts`, `test/build.test.ts`, `skills/build/`, `test/fixtures/build/`, and `docs/history/prototypes/build-isolation/`.
 - [ ] Edit `src/trust/policy.ts`, `test/policy.test.ts`, `server/controller.ts`, `server/sandbox.ts`, `skills/README.md`, `src/controller/orchestrator.ts`, `src/contract/{contract,parse,render,prompt}.ts`, `src/contract/artifacts.ts`, `test/orchestrator.test.ts`, `test/sandbox/runner.cases.ts`, and `test/specify.test.ts` for patch collection, private records, summaries and stage wiring.
 - [ ] Edit `docs/operations/sandbox.md`, `docs/operations/factory-cli.md` and `.pi/skills/verify-factory/**` for the build boundary, two-tick verification and recovery protocol.
 
@@ -477,7 +477,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Files.**
 
-- [ ] Create `.github/workflows/ci.yml`, `.github/factory/gates/` including `scan.ts` and `scan-rules.json`, `host/gates/gates.ts`, `test/candidate-gates.test.ts`, `test/fixtures/gate-cheating/`, `docs/prototypes/trusted-ci/` including `fix1-proof.json`, `fix1-perf.json` and `fix3-proof.json`, and `biome.json`. Edit `tsconfig.json` and `.oxlintrc.json` for the exact `test/acceptance/**` exclusion.
+- [ ] Create `.github/workflows/ci.yml`, `.github/factory/gates/` including `scan.ts` and `scan-rules.json`, `host/gates/gates.ts`, `test/candidate-gates.test.ts`, `test/fixtures/gate-cheating/`, `docs/history/prototypes/trusted-ci/` including `fix1-proof.json`, `fix1-perf.json` and `fix3-proof.json`, and `biome.json`. Edit `tsconfig.json` and `.oxlintrc.json` for the exact `test/acceptance/**` exclusion.
 - [ ] Edit `host/cli/index.ts`, `docs/operations/factory-cli.md`, and `docs/operations/sandbox.md` for the trusted-gates command and operator invocation. Edit `package.json` and `package-lock.json` only for required gate dependencies. Edit `.pi/skills/verify-factory/**` for verification instructions.
 - [ ] Edit `src/contract/{contract,parse,render,prompt}.ts`, `src/contract/artifacts.ts`, `src/candidate/build.ts`, `server/sandbox.ts`, and their tests (`test/specify.test.ts`, `test/artifacts.test.ts`, `test/build.test.ts`, `test/sandbox/**`) for exact contract-authorized test replacement, persistence, build input and visible-test exemptions. Edit this Files block to record the owner's F07b scope amendment.
 
@@ -533,9 +533,9 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Files.**
 
-- [ ] Create `src/candidate/validation.ts`, `src/publication.ts`, `test/validation.test.ts`, `test/publication.test.ts`, and `docs/prototypes/heldout-ci/`.
+- [ ] Create `src/candidate/validation.ts`, `src/publication.ts`, `test/validation.test.ts`, `test/publication.test.ts`, and `docs/history/prototypes/heldout-ci/`.
 - [ ] Edit `src/run.ts`, `src/candidate/stages.ts`, `src/trust/policy.ts`, `src/controller/orchestrator.ts`, `src/trust/markers.ts`, `src/config/{schema,parse,load,views}.ts`, `src/candidate/build.ts`, `server/controller.ts`, `server/sandbox.ts`, and their tests for publication, recovery and exact-head CI evidence. Edit `test/helpers.ts`, `test/pipeline.test.ts`, `test/stages.test.ts`, and `test/policy.test.ts` for the bound pipeline.
-- [ ] Edit `.github/factory/WORKFLOW.md` only for controller-only validate. Edit `docs/statecharts/**`, `docs/operations/sandbox.md`, `docs/operations/factory-cli.md`, `.pi/skills/verify-factory/**`, and this Files block for the F07c contracts. The held-out gate and static exclusions already landed in F07b.
+- [ ] Edit `.github/factory/WORKFLOW.md` only for controller-only validate. Edit `docs/models/**`, `docs/operations/sandbox.md`, `docs/operations/factory-cli.md`, `.pi/skills/verify-factory/**`, and this Files block for the F07c contracts. The held-out gate and static exclusions already landed in F07b.
 
 **Build.**
 
@@ -650,7 +650,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Edit `src/candidate/stages.ts`, `src/run.ts`, `src/controller/orchestrator.ts`, `src/candidate/build.ts`, `src/candidate/validation.ts`, `src/config/{schema,parse,load,views}.ts`, `src/contract/artifacts.ts`, `src/trust/policy.ts`, `server/controller.ts`, `server/sandbox.ts`, and `host/gateway/routes.ts` for review, round storage, repair and OpenAI fallback.
 - [ ] Edit `test/stages.test.ts`, `test/pipeline.test.ts`, `test/orchestrator.test.ts`, `test/build.test.ts`, `test/review.test.ts`, `test/workflow.test.ts`, `test/policy.test.ts`, `test/helpers.ts`, and `test/sandbox/runner.cases.ts` for bindings, shared caps, recovery and refusal tests.
 - [ ] Edit `host/viewer/claim.ts`, `host/viewer/evidence.ts`, `test/viewer.test.ts`, and `docs/operations/viewer.md` for round-aware evidence without compatibility aliases.
-- [ ] Edit `skills/README.md`, `.github/factory/WORKFLOW.md` (review only), `docs/statecharts/**`, `docs/operations/sandbox.md`, `docs/operations/factory-cli.md`, `.pi/skills/verify-factory/**`, and this Files block for the shipped contracts.
+- [ ] Edit `skills/README.md`, `.github/factory/WORKFLOW.md` (review only), `docs/models/**`, `docs/operations/sandbox.md`, `docs/operations/factory-cli.md`, `.pi/skills/verify-factory/**`, and this Files block for the shipped contracts.
 
 **Build.**
 
@@ -709,7 +709,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Edit `server/controller.ts`, `server/sandbox.ts`, `host/cli/index.ts`, `host/viewer/claim.ts`, `host/viewer/evidence.ts`, `host/viewer/render.ts`, and `extension/index.ts` for the single controller interpreter, captured executions and shared local attention view.
 - [ ] Edit `test/helpers.ts`, `test/fake-ticket-adapter.ts`, `test/pipeline.test.ts`, `test/stages.test.ts`, `test/policy.test.ts`, `test/orchestrator.test.ts`, `test/validation.test.ts`, `test/publication.test.ts`, `test/review.test.ts`, `test/markers.test.ts`, `test/github-adapter.test.ts`, `test/extension.test.ts`, `test/viewer.test.ts`, and `test/sandbox/runner.cases.ts` for these contracts.
 - [ ] Edit `.github/workflows/ci.yml` and `.github/workflows/check.yml` under the owner's explicit workflow-authoring grant. Keep candidate execution read-only and the checks-write reporter separate.
-- [ ] Edit `docs/operations/factory-cli.md`, `docs/operations/sandbox.md`, `docs/operations/viewer.md`, `docs/design.md`, this plan, `docs/statecharts/**`, and `.pi/skills/verify-factory/**` only for F09a contracts and verification recipes. No live pass is implied.
+- [ ] Edit `docs/operations/factory-cli.md`, `docs/operations/sandbox.md`, `docs/operations/viewer.md`, `docs/architecture.md`, this plan, `docs/models/**`, and `.pi/skills/verify-factory/**` only for F09a contracts and verification recipes. No live pass is implied.
 
 **Build.**
 
@@ -771,7 +771,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Files.**
 
-- [ ] Create `src/candidate/diagnosis.ts`, `test/base-check.test.ts`, `test/diagnosis.test.ts`, `test/fixtures/oracle-corpus/`, and `docs/prototypes/base-check/`.
+- [ ] Create `src/candidate/diagnosis.ts`, `test/base-check.test.ts`, `test/diagnosis.test.ts`, `test/fixtures/oracle-corpus/`, and `docs/history/prototypes/base-check/`.
 - [ ] Edit `src/contract/{contract,parse,render,prompt}.ts`, `src/contract/acceptance.ts`, `src/candidate/stages.ts`, `src/controller/orchestrator.ts`, `host/gates/gates.ts`, `server/controller.ts`, `skills/acceptance/SKILL.md`, `test/accept.test.ts`, `test/specify.test.ts`, `test/candidate-gates.test.ts`, and `test/orchestrator.test.ts` for scenario kinds, the base run, private failure details, failure classes, and their receipts.
 - [ ] Edit `src/candidate/handoff.ts`, `src/candidate/review.ts`, `server/controller.ts`, `test/handoff.test.ts`, and `test/review.test.ts` for the "Not proven" section and the closed set of non-pass judgment outcomes.
 
@@ -833,7 +833,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Files.**
 
-- [ ] Create `src/ledger.ts`, `test/ledger.test.ts`, `test/ledger-git.ts`, `docs/prototypes/ledger-branch/`, and `docs/operations/ledger.md`.
+- [ ] Create `src/ledger.ts`, `test/ledger.test.ts`, `test/ledger-git.ts`, `docs/history/prototypes/ledger-branch/`, and `docs/operations/ledger.md`.
 - [ ] Edit `src/run.ts`, `src/trust/markers.ts`, `src/controller/orchestrator.ts`, `server/controller.ts`, and `host/cli/index.ts` for durable totals and terminal publication.
 - [ ] Edit `src/publication.ts` and `src/github/exec.ts` for the exact `factory/ledger` ref methods, the shared hash-checked object helpers, the root tree without `base_tree` and bounded ledger transport calls. Candidate branch guards stay unchanged.
 - [ ] Edit `server/sandbox.ts`, `host/sandbox/result.ts`, `host/gateway/audit.ts`, and `host/gateway/gateway.ts` for the synced request dispatch and result journal, execution high-water marks and durable charge recovery. The owner amended this block on 2026-11-04, because the before-request durability rule cannot hold without them.
@@ -845,7 +845,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Implement `appendRun` keyed by run ID with terminal outcome, issue/PR URLs, SHAs, artifact digests, stage timings, repair count, model versions, token totals, spend availability, and evidence links. Append each finished run once, including failures and `needs_info`, not only merges.
 - [ ] Freeze the trusted `WORKFLOW.md` digest, the gate-set digest, and the autonomy level into each ledger row. In v1 the autonomy level is always `approve_merge: always`, which R13 calls `land: propose`. They are two names for the same current policy, not two levels. Do not add a per-tick decision log.
 - [ ] Serialize writes in the single controller. Reconcile a pushed row before retrying after a crash. On a remote advance, fetch and reapply only the missing row, without force-pushing the ledger. Preserve unknown or corrupt rows for diagnosis instead of rewriting history.
-- [ ] Count interrupted attempts apart from failed ones. Today a controller restart during a stage ends that attempt as failed, so restarts use up the attempt cap. Keep that charge, because the interrupted attempt may already have spent tokens. Record each run's interrupted attempts in its ledger row, so `F12a` can tell restarts from real failures. Source is the controller statechart in `docs/statecharts/README.md`.
+- [ ] Count interrupted attempts apart from failed ones. Today a controller restart during a stage ends that attempt as failed, so restarts use up the attempt cap. Keep that charge, because the interrupted attempt may already have spent tokens. Record each run's interrupted attempts in its ledger row, so `F12a` can tell restarts from real failures. Source is the controller statechart in `docs/models/README.md`.
 - [ ] Persist usage at stage boundaries and before dispatching another request. Restore totals after restart. Block new work when a configured token, wall, or known spend cap is exhausted. Keep raw sessions private and publish only redacted evidence.
 
 **You see.**
@@ -891,7 +891,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Files.**
 
-- [ ] Create `docs/prototypes/anthropic-route/` for the route prototype's receipts.
+- [ ] Create `docs/history/prototypes/anthropic-route/` for the route prototype's receipts.
 - [ ] Edit `host/gateway/routes.ts`, `host/gateway/meter.ts`, `host/gateway/gateway.ts`, and `host/install/provision.sh` for the Anthropic route, its usage meter, and the sandbox provider entry.
 - [ ] Edit `src/candidate/review.ts`, `src/candidate/handoff.ts`, `src/contract/acceptance.ts`, `src/config/{schema,parse,load,views}.ts`, and `server/controller.ts` for the family check, seat labels, cross-family certification, and named fallbacks.
 - [ ] Edit `test/sandbox/routes.cases.ts`, `test/sandbox/gateway.cases.ts`, `test/review.test.ts`, `test/handoff.test.ts`, `test/accept.test.ts`, and `test/workflow.test.ts` for these contracts. Create a new test file only when a case fits none of them.
@@ -904,7 +904,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
   - [ ] Add a `model-anthropic` route to `host/gateway/routes.ts`. Today `MODEL_ROUTE_IDS` at `host/gateway/routes.ts:164` lists `model-openai` and `model-xai`. The gateway has one meter, `openai-responses-sse`, the only `Meter` value at `host/gateway/routes.ts:112`. It always mounts `/openai/v1/` at `host/gateway/routes.ts:336`, and mounts `model-xai` at `/xai/v1/` for any fallback that does not start with `openai/`, at `host/gateway/routes.ts:343-349`. Make `model-anthropic` a third route id with its own prefix. Never reach it through that non-OpenAI fallback branch.
   - [ ] Add an Anthropic value to `Meter` and a metered parser for Anthropic's streamed usage in `host/gateway/meter.ts`. Today the OpenAI meter counts a stream with no usage as `unmetered` and still forwards it, per `host/gateway/gateway.ts:995`. For the Anthropic route, a stream with a missing usage block fails the stage instead.
   - [ ] Add the `anthropic` provider to the sandbox bundle's `models.json` in `host/install/provision.sh`, through the in-sandbox forwarder. Today that file lists only `openai` and `xai`, per `host/install/provision.sh:145-149`. The host's Pi config already names `anthropic` at `$LLM/anthropic`, per `host/install/provision.sh:82-86`. The sandbox still holds no credential.
-  - [ ] Prove one metered accept-stage call on `pi-factorio` before wiring stages. Save the gateway audit and meter receipt in `docs/prototypes/anthropic-route/`.
+  - [ ] Prove one metered accept-stage call on `pi-factorio` before wiring stages. Save the gateway audit and meter receipt in `docs/history/prototypes/anthropic-route/`.
 - [ ] Move the accept stage to an Anthropic model set in trusted `.github/factory/WORKFLOW.md`. Today every model stage there is `openai/gpt-6.1-sol`. Keep the builder and repair on OpenAI. Choose the exact Anthropic model ID from the live integration catalog when building.
 - [ ] Add one blocking review seat on an Anthropic model, or move the code-review seat to it. Keep the other seats, the security fallback, and the shared review budget.
 - [ ] Add a `familyOf` check in code.
@@ -960,7 +960,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [x] F10-1. Create `src/candidate/feedback.ts` and `test/feedback.test.ts`. Edit `src/github/tickets.ts`, `src/github/adapter.ts`, `src/candidate/handoff.ts`, `src/controller/orchestrator.ts`, `server/controller.ts`, `test/fake-ticket-adapter.ts`, `test/github-adapter.test.ts`, `test/handoff.test.ts`, `test/orchestrator.test.ts`, `test/pipeline.test.ts`, and `docs/operations/human-review.md` for feedback readers, intake bound to the promoted head, the immutable feedback batch, the book's idempotent feedback cursor, intake notices, and merged-PR proposals.
 - [x] F10-2. Create `skills/address-pr-comments/` with provenance. Edit `src/candidate/handoff.ts`, `src/controller/orchestrator.ts`, `src/candidate/review.ts`, `src/candidate/build.ts`, `src/trust/policy.ts`, `src/candidate/feedback.ts`, `server/sandbox.ts`, `server/controller.ts`, `skills/README.md`, `test/handoff.test.ts`, `test/orchestrator.test.ts`, `test/publication.test.ts`, `test/review.test.ts`, `test/build.test.ts`, `test/policy.test.ts`, and `test/feedback.test.ts` for the feedback repair cause, same-PR successor publication, round summaries, the repair stop rules, and published holds at every stop site.
 - [x] F10-3. Edit `src/candidate/handoff.ts`, `src/controller/orchestrator.ts`, `src/publication.ts`, `src/ledger.ts`, `server/controller.ts`, `server/sandbox.ts`, `docs/operations/human-review.md`, `docs/operations/ledger.md`, `test/handoff.test.ts`, `test/orchestrator.test.ts`, `test/publication.test.ts`, `test/validation.test.ts`, `test/sandbox/runner.cases.ts`, and `test/ledger.test.ts` for owner-head drift, the owner validate-and-review path, and the version 5 ledger row.
-- [x] F10-4. Create `docs/statecharts/journey/Feedback.cfg`. Edit `docs/statecharts/journey/Journey.tla`, `docs/statecharts/journey/Journey.cfg`, `docs/statecharts/journey/replay-merge-mid-repair.ts`, `docs/statecharts/README.md`, and `test/handoff.test.ts`. Edit `docs/statecharts/controller/Controller.tla` only as far as its instance of Journey needs.
+- [x] F10-4. Create `docs/models/journey/Feedback.cfg`. Edit `docs/models/journey/Journey.tla`, `docs/models/journey/Journey.cfg`, `docs/models/journey/replay-merge-mid-repair.ts`, `docs/models/README.md`, and `test/handoff.test.ts`. Edit `docs/models/controller/Controller.tla` only as far as its instance of Journey needs.
 
 **Build.**
 
@@ -990,7 +990,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [x] F10-3. Recertify the owner's exact head with no build and no commit. Hold `refresh_limit` instead when the generation number is already 3, because the nonce grammar at `.github/workflows/ci.yml:113` stops at `-g3`. Derive the patch from the owner tree after replacing `test/acceptance` with the base's tree, and refuse a changed held-out suite, a path the path policy forbids, a head whose compare status against `main` is not ahead, or a diff over the review input bound. Validate through an owner path that skips `readPatch`, the builder visible-test check at `host/controller/validation-sweep.ts:296-301`, and `publishCandidate` at `host/controller/validation-sweep.ts:715`. Pin the owner head with a controller-owned `factory/run/*` ref that the existing cleanup deletes, and never write `factory/pr/*`, because cleanup deletes the publication branch on pass and failure at `host/controller/validation-sweep.ts:83-111`. Bind the verdict to the owner head, certify with an owner patch check and an unavailable builder family, and review the stored owner patch in the sandbox. On a pass, restore readiness through `complete_handoff`. On a failure or refusal, hold and post one head-bound notice. A failing `check` on the certified head also holds with one notice for each head. Run a model-free prototype of this integrated path before the builder starts.
 - [x] F10-3. Record owner authorship in a version 5 ledger row, with `authored` beside a `factory_verified` landing, derived from the certifying generation's origin. Leave versions 1 to 4 byte-identical. An older controller then blocks appends on the unknown version instead of misreading a row, as `docs/operations/ledger.md` already requires. Roll forward only.
 - [x] F10-3. Never rewrite owner commits. Defer automatic reconciliation, which builds on top of owner commits, until after F10. Refuse a feedback repair on an owner-authored head with a notice. When `main` moves under an owner-authored head, or under an owner generation still in validation or review, hold and ask the owner to update the branch instead of refreshing.
-- [x] F10-4. Change the journey model's locks on repair after publication. Replace `NoPostPrRepair` at `docs/statecharts/journey/Journey.tla:249` with invariants that a published repair phase has a feedback cause and no readiness, that no generation is built on an owner head, and that a factory-verified merge names its author truthfully. Widen the `RepairDue` guard `b.published = 0` at `Journey.tla:105-108` to admit that cause. Keep the published holds in `FailOrRepair` at `Journey.tla:74-76` and in `ReviewResult` at `Journey.tla:146`, as the owner decided for a blocked repaired head. Add an owner-review event, a feedback repair entry within the shared repair cap, the owner-push event, and an owner-head recertification in a new `feedback` partition, each enabled only while the PR is open, as `observed` orders merge and close first. Hold instead of refreshing an owner-authored head. Add the new book fields to `InitialBook`. Keep every other path held, and keep every other run out of repair.
+- [x] F10-4. Change the journey model's locks on repair after publication. Replace `NoPostPrRepair` at `docs/models/journey/Journey.tla:249` with invariants that a published repair phase has a feedback cause and no readiness, that no generation is built on an owner head, and that a factory-verified merge names its author truthfully. Widen the `RepairDue` guard `b.published = 0` at `Journey.tla:105-108` to admit that cause. Keep the published holds in `FailOrRepair` at `Journey.tla:74-76` and in `ReviewResult` at `Journey.tla:146`, as the owner decided for a blocked repaired head. Add an owner-review event, a feedback repair entry within the shared repair cap, the owner-push event, and an owner-head recertification in a new `feedback` partition, each enabled only while the PR is open, as `observed` orders merge and close first. Hold instead of refreshing an owner-authored head. Add the new book fields to `InitialBook`. Keep every other path held, and keep every other run out of repair.
 
 **You see.**
 
@@ -1001,7 +1001,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [x] F10-1. Cover all comment sources, provider-qualified IDs, permission checks, permission read failures, stale heads, deferred reads during the promotion window, held-out inline refusal, the seen-ID set, one observation applied twice with and without a queued callback, cursor carry through every later row, a queued actionable batch with one notice and no repair, notices held during a running stage, dismissal, cursor recovery across crash boundaries, and merged-PR proposals in `test/feedback.test.ts`, `test/github-adapter.test.ts`, `test/handoff.test.ts`, and `test/orchestrator.test.ts`. Unit-test that a non-writer's review, comment, and inline comment add no card. Run `npm run check`.
 - [x] F10-2. Test readiness withdrawal before any build, shared repair caps, queued and superseded batches, a book written by F10-1 resuming into one repair, the successor publication, the promotion window, round summaries, a merge during each repair phase, `repair_no_progress` from the sandbox's reason, repeated findings by fingerprint, later-round blocking scope, published holds at every stop site, card truncation, and dispositions in `test/handoff.test.ts`, `test/orchestrator.test.ts`, `test/publication.test.ts`, `test/review.test.ts`, and `test/feedback.test.ts`. Run `npm run check`.
 - [x] F10-3. Test drift detection before spend, one notice for each head, a stable hold time, the generation limit, each derivation refusal, an owner validation that records no commit and no write to the PR branch, owner certification and its refusals, review preparation with no held-out path, recertification pass and failure, owner-authored merges, the version 5 ledger row, refused repairs on owner-authored heads, and the behind-main hold in `test/handoff.test.ts`, `test/orchestrator.test.ts`, `test/publication.test.ts`, `test/validation.test.ts`, `test/sandbox/runner.cases.ts`, and `test/ledger.test.ts`. Run `npm run check`.
-- [x] F10-4. Give `docs/statecharts/journey/Journey.tla` the changes above and run TLC. The structural config with the new invariants must complete within 1,200 seconds. Witness invariants for a published repair, an owner-authored ready head, an owner-authored merge, and a merge during a feedback repair must each fail with a trace within 300 seconds, so the invariants are not passing vacuously. `MergeAssuranceTruthful` must still hold, so every merge without an owner override names a head whose checks and review passed. A counterexample blocks. Pending owner approval, the new feedback partition gets one 1,800-second attempt and one retry without main movement, and a timeout there is recorded in `docs/statecharts/README.md` with its unchecked properties without blocking delivery. Without that approval, rerun TLC until every invariant holds, shrinking only recorded bounds, and bring the owner the log after a second timeout. Extend `replay-merge-mid-repair.ts` with the F10 `formal` tests.
+- [x] F10-4. Give `docs/models/journey/Journey.tla` the changes above and run TLC. The structural config with the new invariants must complete within 1,200 seconds. Witness invariants for a published repair, an owner-authored ready head, an owner-authored merge, and a merge during a feedback repair must each fail with a trace within 300 seconds, so the invariants are not passing vacuously. `MergeAssuranceTruthful` must still hold, so every merge without an owner override names a head whose checks and review passed. A counterexample blocks. Pending owner approval, the new feedback partition gets one 1,800-second attempt and one retry without main movement, and a timeout there is recorded in `docs/models/README.md` with its unchecked properties without blocking delivery. Without that approval, rerun TLC until every invariant holds, shrinking only recorded bounds, and bring the owner the log after a second timeout. Extend `replay-merge-mid-repair.ts` with the F10 `formal` tests.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe. Each lane runs at the head of the slice that closes it, and lanes share fixtures as the design's token plan describes. On `[F10-...]` fixtures the coordinator acts as the owner under the grant recorded on 2026-11-07, including reviews, pushes, and merges.
 
@@ -1047,7 +1047,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Build.**
 
-- [x] Implement the primary metric from `docs/design.md`. Report the share of `factory:ready` tickets that landed with zero repair rounds and no linked follow-up defect within seven days. Report it against all tokens spent on that cohort, including failed, cancelled, and `needs_info` runs, as tokens per clean landing. Count a ticket once across clarification attempts.
+- [x] Implement the primary metric from `docs/architecture.md`. Report the share of `factory:ready` tickets that landed with zero repair rounds and no linked follow-up defect within seven days. Report it against all tokens spent on that cohort, including failed, cancelled, and `needs_info` runs, as tokens per clean landing. Count a ticket once across clarification attempts.
 - [x] Exclude verification runs from every cohort. Drop each row with `provenance.kind: "verification"`. Also drop `factory/ledger` line 13, run `199df6dc85d53522b12bded884ebe6351dffcb80f7e456d42124ab39e994489f` (issue #621, PR #622), an F10c verification run whose row says `production` by mistake, as `docs/operations/ledger.md` records.
 - [x] Apply mature-cohort rules. A landed ticket matures seven days after its merge. Report a cohort with immature tickets as pending, and report unknown defect follow-up separately instead of treating missing evidence as clean. Serve the report as `metrics --json`. It reads only the ledger and redacted receipts and calls no model.
 - [x] Add measurements that decide deferred work. Report context pressure, the share of stage prompts that hit a truncation flag or a prompt cap, to decide on full context packs. Report restart-ended runs, failed runs with interrupted attempts on the ledger, to decide R11. Report explicit-intake demand, write-access requests for factory work on issues without `factory:ready`, to decide on a model intake router. Each report names its revisit threshold, proposed at 10% of mature runs. None of them builds the deferred work.
@@ -1177,12 +1177,12 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 ## Supply the Factory tab inputs for Shep (F09d)
 
-**Depends on.** F09c. This unit is optional and blocks nothing. It writes only `docs/prototypes/ios-app/`, so it may run beside later code units. The owner decided that the owner UI is a Factory tab in Shep v3, beside Chats (Shep R25, in the comments on #714, #716 and #719). Factorio ships no app of its own. This is research and docs work only, and no product code ships. The OwnerFeed contract and its captures already exist in `docs/operations/owner-feed.md` and `test/fixtures/owner-feed/captures/`, so this unit points at them and does not copy them.
+**Depends on.** F09c. This unit is optional and blocks nothing. It writes only `docs/history/prototypes/ios-app/`, so it may run beside later code units. The owner decided that the owner UI is a Factory tab in Shep v3, beside Chats (Shep R25, in the comments on #714, #716 and #719). Factorio ships no app of its own. This is research and docs work only, and no product code ships. The OwnerFeed contract and its captures already exist in `docs/operations/owner-feed.md` and `test/fixtures/owner-feed/captures/`, so this unit points at them and does not copy them.
 
 **Files.**
 
-- [ ] Create `docs/prototypes/ios-app/` with `decision.md` and `screens.md`. The directory keeps its name so earlier references still resolve. It holds inputs for Shep, not an app.
-- [ ] Edit nothing outside `docs/prototypes/ios-app/`. Make no change to the shep repository. Write no `apple-setup.md`, no `shep-lessons.md` and no Swift package, because Shep owns the Apple setup, the bundle ID and the client code.
+- [ ] Create `docs/history/prototypes/ios-app/` with `decision.md` and `screens.md`. The directory keeps its name so earlier references still resolve. It holds inputs for Shep, not an app.
+- [ ] Edit nothing outside `docs/history/prototypes/ios-app/`. Make no change to the shep repository. Write no `apple-setup.md`, no `shep-lessons.md` and no Swift package, because Shep owns the Apple setup, the bundle ID and the client code.
 
 **Build.**
 
@@ -1207,11 +1207,11 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 - [ ] Lane 3. Satisfied by the scoped adaptation. Run the feed test that adds an unknown field to a capture and then sets `version` to 2. Save `decode-versions.log`. Pass when the unknown field is accepted and version 2 is refused.
 - [ ] Lane 4. Satisfied by the scoped adaptation. Regenerate the captures with `node --experimental-strip-types test/fixtures/owner-feed/capture.ts`, which formats its output with Biome, and run `git diff --exit-code test/fixtures/owner-feed/captures`. Save `captures-regenerated.log`. Pass when the diff is empty.
 - [ ] Lane 5. Satisfied by the scoped adaptation. Read `screens.md` against `test/fixtures/owner-feed/feed-v1.json`. Save `home-order.json`. Pass when the sketch groups runs that wait on the owner first, then failed runs, and shows working runs only as the feed's working-run count. The array in the golden is ordered by `since`, then issue, so the sketch must not take screen order from the array.
-- [ ] Lane 6. Satisfied by the scoped adaptation. Search `docs/prototypes/ios-app/` and `docs/operations/owner-feed.md` for the push limits. Save `push-rule.log`. Pass when each states 64 bytes and 256 bytes in UTF-8, none states a word limit, and none carries issue body or model text.
+- [ ] Lane 6. Satisfied by the scoped adaptation. Search `docs/history/prototypes/ios-app/` and `docs/operations/owner-feed.md` for the push limits. Save `push-rule.log`. Pass when each states 64 bytes and 256 bytes in UTF-8, none states a word limit, and none carries issue body or model text.
 - [ ] Lane 7. Satisfied by the scoped adaptation. Search `src/`, `server/` and `extension/` for `apns`. Save `no-apns.log`. Pass when nothing matches, which shows the controller sends no push.
 - [ ] Lane 8. Satisfied by the scoped adaptation. Read the title in `test/fixtures/owner-feed/captures/working.json`, which holds HTML and Markdown, and the title rules in `docs/operations/owner-feed.md`. Save `title-plain.log`. Pass when the capture keeps the markup as text and the document says to render it as plain text.
 - [ ] Lane 9. Satisfied by the scoped adaptation. Read the independent memo review. Save `memo-review.md`. Pass when every claim in the memos about `OwnerFeed` v1 matches the captures and no memo reopens the app choice or the exposure question.
-- [ ] Lane 10. Satisfied by the scoped adaptation. Inspect the PR diff and the shep repository head. Save `scope.json`. Pass when only `docs/prototypes/ios-app/` changed and the shep repository head is unchanged.
+- [ ] Lane 10. Satisfied by the scoped adaptation. Inspect the PR diff and the shep repository head. Save `scope.json`. Pass when only `docs/history/prototypes/ios-app/` changed and the shep repository head is unchanged.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -1303,7 +1303,7 @@ F12 ships in four serial PRs under decision `f12-split`. F12b owns the primary-f
 - [ ] Edit `src/candidate/stages.ts` and `test/stages.test.ts` for the shared read-only judge profile. Left open. F12b made no edit here, because the `maintain` stage already carried the `judge` profile. The F12b review confirmed that it is tool-free with one route.
 - [x] Edit `docs/operations/ledger.md` to document the append-only score stream without changing terminal row versions. Met by F12b (#703). Verified at `818cfcf`. The run rows and their versions are unchanged.
 - [x] Update only the `workflowDigest` fields in `test/fixtures/efficiency/replay.json` and `test/fixtures/efficiency/accept-replay.json` when trusted workflow bytes change. Done by F12b and F12c. Verified at `1d6d8e3`. Both PRs changed only those fields. F12d and F12e must repeat it if they change the workflow bytes.
-- [x] F12c edits `src/maintenance/cadence.ts`, `src/maintenance/scorers.ts`, `src/config/{schema,parse,load,views}.ts`, `server/controller.ts`, `host/cli/index.ts`, `.github/factory/WORKFLOW.md`, `test/cadence.test.ts`, `test/scorers.test.ts`, `test/explain.test.ts`, `test/workflow.test.ts`, `skills/README.md`, `docs/operations/cadence.md`, `docs/operations/improvement.md`, this plan at `docs/plans/factory-v1.md`, and only `workflowDigest` in the two efficiency fixtures above. The coordinator also granted the score-command publication-status fix, verified run-checkpoint reuse and automatic sampling after a hold.
+- [x] F12c edits `src/maintenance/cadence.ts`, `src/maintenance/scorers.ts`, `src/config/{schema,parse,load,views}.ts`, `server/controller.ts`, `host/cli/index.ts`, `.github/factory/WORKFLOW.md`, `test/cadence.test.ts`, `test/scorers.test.ts`, `test/explain.test.ts`, `test/workflow.test.ts`, `skills/README.md`, `docs/operations/cadence.md`, `docs/operations/improvement.md`, this plan at `docs/plans/active/factory-v1.md`, and only `workflowDigest` in the two efficiency fixtures above. The coordinator also granted the score-command publication-status fix, verified run-checkpoint reuse and automatic sampling after a hold.
 - [x] F12c creates `skills/reflect-ledger/SKILL.md`, `skills/reflect-ledger/SOURCE.md`, `skills/reflect-ledger/LICENSE`, `skills/agent-loop-spec/SKILL.md` and `skills/agent-loop-spec/SOURCE.md`. Reflect is MIT, Lauren Tan. Agent-loop-spec is owner-authored with no upstream licence, following the hygiene precedent and disclosing the Cursor Agent-authored upstream commit.
 
 **Build.**
@@ -1366,7 +1366,7 @@ F12 ships in four serial PRs under decision `f12-split`. F12b owns the primary-f
 
 **Files.**
 
-- [ ] Create `src/adapters/linear.ts`, `test/linear-adapter.test.ts`, `test/adapter-contract.test.ts`, `docs/prototypes/linear-polling/`, and `docs/operations/linear.md`.
+- [ ] Create `src/adapters/linear.ts`, `test/linear-adapter.test.ts`, `test/adapter-contract.test.ts`, `docs/history/prototypes/linear-polling/`, and `docs/operations/linear.md`.
 - [ ] Edit `src/github/tickets.ts`, `src/trust/admission.ts`, `src/controller/orchestrator.ts`, `src/run.ts`, `src/config/{schema,parse,load,views}.ts`, `src/trust/markers.ts`, `server/controller.ts`, `host/cli/index.ts`, `test/fake-ticket-adapter.ts`, `test/admission.test.ts`, `test/orchestrator.test.ts`, and `.github/factory/WORKFLOW.md` only for provider configuration, capability ports, and shared adapter contract support.
 
 **Build.**
@@ -1419,11 +1419,11 @@ F12 ships in four serial PRs under decision `f12-split`. F12b owns the primary-f
 ## Close the program
 
 - [ ] Check every completed box against its artifact and exact revision. Leave blocked boxes unchecked. Do not describe this program as fully verified while Linear live proof, branch protection, mature metrics, or the required cross-family acceptance evidence is absent.
-- [ ] Re-run the eight definition-of-done scenarios from `docs/design.md` on the assembled GitHub controller. Link the results from `F04b`, `F04c`, `F06a`, `F07b`, `F07c`, `F09a`, `F09b`, `F10c`, and `F10`. Verify item 2's cross-family clause through `F10c`'s cross-family certified run, rather than reporting it as incomplete.
+- [ ] Re-run the eight definition-of-done scenarios from `docs/architecture.md` on the assembled GitHub controller. Link the results from `F04b`, `F04c`, `F06a`, `F07b`, `F07c`, `F09a`, `F09b`, `F10c`, and `F10`. Verify item 2's cross-family clause through `F10c`'s cross-family certified run, rather than reporting it as incomplete.
 - [ ] Deliver the `autopilot-full` report with each PR's URL, merge commit, one-line verdict and exact verified head, the external actions taken and their grants, and excluded work with reasons. Include evidence and decision-trail paths.
 - [ ] Confirm that the factory stops at Human Review, uses no stored GitHub token on the VM, uses no GitHub secrets for model access, and has no GitHub App, webhook receiver, or Tailscale dependency. Leave npm publishing and any future deployment outside this program.
 - [ ] Name the measured next steps after the core loop. Run real production tickets and report them with `F12a`'s metric. Then run the same factory on a second target repository. This program builds neither.
-- [ ] Leave computer-use verification out of v1. `docs/design.md` Known risks records the deferred pattern for a future UI target. Source is owner decision 2026-10-29, after comparing Warp Factories.
+- [ ] Leave computer-use verification out of v1. `docs/architecture.md` Known risks records the deferred pattern for a future UI target. Source is owner decision 2026-10-29, after comparing Warp Factories.
 
 ## Appendix A. Prototype evidence
 
@@ -1432,7 +1432,7 @@ The planning checkout was clean at `04b69c3b72b68ee8d4351d40bd42daf68d42a67f`. N
 | Unit | Recorded proof | Revision or branch | What it does not prove |
 | --- | --- | --- | --- |
 | 0 | [Run 40767252647](https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/40767252647) printed `factory-smoke-ok` | The decisions row identifies the run, not its source SHA or branch. Read run metadata if reproducing historical provenance. | Current VM isolation or current CI architecture. Tailnet workflows and credentials were removed in `a893370`. Do not recreate them. |
-| 1 | [Run 40768344796](https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/40768344796), [job 123098473635](https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/40768344796/job/123098473635), `docs/prototypes/herdr-on-runner.md` | Tested commit `a8f1285bb4e358bcfe6d56b4e7234b14fdaa2299`. Report committed at `1a345ea`, prototype merged at `fc34d66`. Decisions identify retained branch `factory-herdr-probe`, worktree removed with approval. | Rootless containment, allowed egress, full pstack execution, concurrent capacity, or cross-family review. The old runner used revoked tailnet access. |
+| 1 | [Run 40768344796](https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/40768344796), [job 123098473635](https://github.com/giuseppecrj/pi-herdr-factorio/actions/runs/40768344796/job/123098473635), `docs/history/prototypes/herdr-on-runner.md` | Tested commit `a8f1285bb4e358bcfe6d56b4e7234b14fdaa2299`. Report committed at `1a345ea`, prototype merged at `fc34d66`. Decisions identify retained branch `factory-herdr-probe`, worktree removed with approval. | Rootless containment, allowed egress, full pstack execution, concurrent capacity, or cross-family review. The old runner used revoked tailnet access. |
 | 2 | `npm run check` with 60 of 60 tests, `docs/decisions.tsv` | Skeleton `8ef1924`, widened `.github/` path protection `db91d1a`. Decisions identify retained branch `factory-skeleton`, worktree removed with approval. | Polling, service state, real adapter, sandbox, CI, or publication. Existing pipeline tests call the pure transition function through a fake. |
 | 3 | VM `gh` reads, clone and label writes. Four model smoke replies. Later default-model smoke replied `default-ok`. All recorded in `docs/decisions.tsv`. | VM bring-up under `8154ca8`, provisioning `3228ca1`, default model `04b69c3`. No hosted run URL is recorded for these VM checks. | Current Anthropic authorization, sandbox egress, service recovery, or hosted candidate validation. Earlier Anthropic success did not authorize its use. The owner's 2026-11-02 decision does, through `F10c`. |
 
@@ -1457,7 +1457,7 @@ No new sandbox, snapshot-at-label-time, main-gates, post-publication holdout, le
 - Linear-native agent sessions introduce webhook acknowledgement requirements outside the selected polling model. Unit 13 uses ordinary polled tickets through the existing adapter.
 - A database or distributed claim service adds no demonstrated value for the single VM/controller scope. Marker comments, workspace receipts, and serialized ledger writes cover the specified restart cases. Revisit only if an observed failure requires it.
 - Decomposition, multi-PR splitting, and large agent swarms stay out of v1, by owner decision on 2026-11-02. They do not serve one authorized issue to one ready PR.
-- Reports 4 and 5 contain earlier recommendations about draft PRs, Apps, tailnets, and automatic landing. The later owner decisions in `docs/design.md` and `docs/decisions.tsv` supersede those recommendations.
+- Reports 4 and 5 contain earlier recommendations about draft PRs, Apps, tailnets, and automatic landing. The later owner decisions in `docs/architecture.md` and `docs/decisions.tsv` supersede those recommendations.
 
 ## Appendix C. Risks
 
@@ -1523,7 +1523,7 @@ These are every intentional template adaptation in this document.
 
 ### R12. Cross-family acceptance is decided and closed by F10c
 
-`docs/design.md` item 2 requires the held-out suite to come from a different model family than the builder. Until 2026-11-02 this was an open owner decision, because the VM ran OpenAI models only and no plan unit closed the gap. On 2026-11-02 the owner allowed Anthropic models on the VM, and `F10c` moves the accept stage to an Anthropic model. A run that uses a named same-family fallback records `r8: "incomplete"` and lists it under the handoff's "Not proven" section. Before `F10c` merges, report item 2's cross-family clause as incomplete.
+`docs/architecture.md` item 2 requires the held-out suite to come from a different model family than the builder. Until 2026-11-02 this was an open owner decision, because the VM ran OpenAI models only and no plan unit closed the gap. On 2026-11-02 the owner allowed Anthropic models on the VM, and `F10c` moves the accept stage to an Anthropic model. A run that uses a named same-family fallback records `r8: "incomplete"` and lists it under the handoff's "Not proven" section. Before `F10c` merges, report item 2's cross-family clause as incomplete.
 
 ### R13. Loosening autonomy needs a designed ladder
 
@@ -1531,7 +1531,7 @@ This is a design note only. Each stage gets a level, `observe`, `propose`, or `a
 
 ## Appendix D. Links and reading list
 
-The normative product specification is [Factory design](../design.md), with chronology in [the decision trail](../decisions.tsv). [The Herdr prototype](../prototypes/herdr-on-runner.md) bounds what unit 1 proved. The skill inventory is [the synthesis](../../research/SYNTHESIS.md), with licensing in [provenance](../../research/PROVENANCE.md). Read [integration research](../../research/reports/factory-research-4.md), [validation research](../../research/reports/factory-research-5.md), and [the owner-skill audit](../../research/reports/factory-review-1.md) as supporting evidence, subject to the later owner decisions.
+The normative product specification is [Factory design](../../architecture.md), with chronology in [the decision trail](../../decisions.tsv). [The Herdr prototype](../../history/prototypes/herdr-on-runner.md) bounds what unit 1 proved. The skill inventory is [the synthesis](../../../research/SYNTHESIS.md), with licensing in [provenance](../../../research/PROVENANCE.md). Read [integration research](../../../research/reports/factory-research-4.md), [validation research](../../../research/reports/factory-research-5.md), and [the owner-skill audit](../../../research/reports/factory-review-1.md) as supporting evidence, subject to the later owner decisions.
 
 The coordination reference is [Symphony SPEC at be10a1b](https://github.com/openai/symphony/blob/be10a1b79df723d6d7612b5651c8522704dafb2e/SPEC.md), especially workflow loading, scheduling, workspaces, and recovery. Pi RPC implementers must read `docs/rpc.md`, its command/event cross-references, and `docs/security.md` from the installed Pi package before `F05`. Resolve the installation from the harness documentation inventory. The historical program used Pi 1.4.0. Read package and extension documentation there before changing extension loading. Do not infer RPC settlement behavior from process exit alone.
 
@@ -1543,4 +1543,4 @@ Keep future execution trails per `<pstack>/skills/show-me-your-work/SKILL.md` in
 
 Read the existing code and callers before each edit. `src/run.ts` owns `Run`, `Progress`, `Verdict`, and digests. `src/candidate/stages.ts` owns `advance`, stage order, and the shared two-round repair cap. `src/trust/policy.ts` owns admission, fail-closed switch parsing, forbidden paths, and the current digest-only handoff precondition. `src/github/tickets.ts` currently has `fetch`, not polling methods. `extension/index.ts` currently registers only `/factory status`. `test/pipeline.test.ts` exercises the pure core through `test/fake-ticket-adapter.ts`, not a service. `host/install/provision.sh` sets the default model and installs Pi/Herdr packages but does not implement the sandbox or controller.
 
-The plan checker command is `node <pstack>/skills/poteto-mode/scripts/check-plan.mjs docs/plans/factory-v1.md`. Its successful stdout contains counts by design. Preserve that output in the handoff rather than suppressing it to imitate a silent check.
+The plan checker command is `node <pstack>/skills/poteto-mode/scripts/check-plan.mjs docs/plans/active/factory-v1.md`. Its successful stdout contains counts by design. Preserve that output in the handoff rather than suppressing it to imitate a silent check.

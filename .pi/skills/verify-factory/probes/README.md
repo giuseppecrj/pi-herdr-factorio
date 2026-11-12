@@ -1,6 +1,6 @@
 # probes
 
-This folder holds the probe programs that verify-factory feature recipes run against a lane's stored run on the VM. Each one checks an isolation boundary with a real sandbox and spends no model tokens. They began as prototypes under `docs/prototypes/`, where their evidence and history still live. `docs/history/path-map.md` records the move.
+This folder holds the probe programs that verify-factory feature recipes run against a lane's stored run on the VM. Each one checks an isolation boundary with a real sandbox and spends no model tokens. They began as prototypes under `docs/history/prototypes/`, where their evidence and history still live. `docs/history/path-map.md` records the move.
 
 | Probe | Run by | What it proves |
 | --- | --- | --- |
