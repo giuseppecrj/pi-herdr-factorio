@@ -19,11 +19,11 @@ Preconditions:
 - The headless agent socket exists at `$HOME/.ssh/headless-agent.sock`.
 
 - **Run doctor.** `.pi/skills/verify-factory/scripts/vm.sh .pi/skills/verify-factory/scripts/doctor.sh`. Exit code 0. Output starts with `target=<name>` and has `node=v26.`, `pi=1.4.0`, `herdr=herdr 0.9.5`, `repo=nublai/pi-herdr-factorio default=main`, and `doctor=ok`.
-- **Reconcile versions.** Compare with `PI_VERSION` and `HERDR_VERSION` in `server/provision.sh`. They match.
+- **Reconcile versions.** Compare with `PI_VERSION` and `HERDR_VERSION` in `host/install/provision.sh`. They match.
 
 ## Gotchas
 
 - `PATH` lacks mise shims in a non-interactive ssh shell. The scripts set it. A hand-typed command may report `node: command not found`.
 - An unknown or unconfigured target exits 2 before any ssh connection. `factorio` is unconfigured until the exmach VM exists.
 - `gh api user` fails by design. Use repository-scoped calls.
-- A provisioning change makes the expected versions move. Update this file with `server/provision.sh`.
+- A provisioning change makes the expected versions move. Update this file with `host/install/provision.sh`.

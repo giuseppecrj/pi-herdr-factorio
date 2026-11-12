@@ -12,11 +12,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { readAttention, ATTENTION_KINDS } from "../src/views/attention.ts";
-import { readOwnerFeed } from "../server/cli/owner-feed.ts";
+import { readOwnerFeed } from "../host/cli/owner-feed.ts";
 import { digestOf, runIdOf } from "../src/core/run.ts";
 import { parseWorkflow } from "../src/config/parse.ts";
 import { isRepoSlug } from "../src/trust/platform.ts";
-import { runCli } from "../server/cli.ts";
+import { runCli } from "../host/cli/index.ts";
 import { registerFactory } from "../extension/index.ts";
 import type { JsonValue } from "../src/core/json.ts";
 import {
@@ -38,7 +38,7 @@ import {
 	withUmask,
 } from "./helpers.ts";
 import { TRUSTED_RUN_CAP, TRUSTED_WORKFLOW } from "./fake-ticket-adapter.ts";
-import { fileRunFiles } from "../server/controller/run-files.ts";
+import { fileRunFiles } from "../host/controller/run-files.ts";
 import type { AnswersDigest } from "../src/contract/contract.ts";
 import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 import { noPlatformFile } from "./helpers.ts";
@@ -949,7 +949,7 @@ test("standalone CLI process reports saved working and cold evidence without ext
 		process.execPath,
 		[
 			"--experimental-strip-types",
-			"server/cli.ts",
+			"host/cli/index.ts",
 			"status",
 			"--json",
 			"--repo",

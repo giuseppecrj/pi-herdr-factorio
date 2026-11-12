@@ -23,16 +23,17 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { EXIT, runCli, type ControllerRuntime } from "../server/cli.ts";
-import { runStage, type StageHost } from "../server/sandbox/run-stage.ts";
-import { sandboxExecutor } from "../server/sandbox/executor.ts";
+import { EXIT, type ControllerRuntime } from "../host/cli/platform.ts";
+import { runCli } from "../host/cli/index.ts";
+import { runStage, type StageHost } from "../host/sandbox/run-stage.ts";
+import { sandboxExecutor } from "../host/sandbox/executor.ts";
 import { PassThrough } from "node:stream";
 import type { JsonValue } from "../src/core/json.ts";
 import type { FeedbackObservation } from "../src/candidate/feedback.ts";
 import { readAttention } from "../src/views/attention.ts";
-import type { ControlEvent } from "../server/sandbox/control.ts";
-import { readViewerRun } from "../server/viewer.ts";
-import { manifestDigest } from "../server/sandbox/manifest.ts";
+import type { ControlEvent } from "../host/gateway/control.ts";
+import { readViewerRun } from "../host/viewer/evidence.ts";
+import { manifestDigest } from "../host/bundle/manifest.ts";
 import {
 	BUILD_MAX_TOKENS,
 	collectPatch,
@@ -44,23 +45,23 @@ import {
 	acquireLock,
 	type ProcessTable,
 	parseStartTime,
-} from "../server/controller/lock.ts";
+} from "../host/controller/lock.ts";
 import {
 	fileLedgerOutbox,
 	readLedgerBacklog,
-} from "../server/controller/outbox.ts";
-import { fileRunFiles } from "../server/controller/run-files.ts";
-import { pinVerification, writeStatus } from "../server/controller/state.ts";
+} from "../host/controller/outbox.ts";
+import { fileRunFiles } from "../host/controller/run-files.ts";
+import { pinVerification, writeStatus } from "../host/controller/state.ts";
 import {
 	controllerCandidatePort,
 	WORKFLOW_READ_LIMIT,
 	observeFeedback,
 	storeFeedbackBatch,
-} from "../server/controller/candidate-port.ts";
-import { controllerBaseChecker } from "../server/controller/checkers.ts";
-import { readRunCharges } from "../server/controller/terminal.ts";
-import { serveLoop } from "../server/controller/serve-loop.ts";
-import { HOLDER_FILE } from "../server/controller/state.ts";
+} from "../host/controller/candidate-port.ts";
+import { controllerBaseChecker } from "../host/controller/checkers.ts";
+import { readRunCharges } from "../host/controller/terminal.ts";
+import { serveLoop } from "../host/controller/serve-loop.ts";
+import { HOLDER_FILE } from "../host/controller/state.ts";
 import { GitHubTicketAdapter } from "../src/github/adapter.ts";
 import {
 	type AdmissionStore,
@@ -99,7 +100,7 @@ import type {
 	StageResult,
 } from "../src/controller/launch.ts";
 import { type SessionOutcome } from "../src/core/execution.ts";
-import { stageResult } from "../server/sandbox/result.ts";
+import { stageResult } from "../host/sandbox/result.ts";
 import { READY_LABEL } from "../src/trust/policy.ts";
 import {
 	classifiedCase,
@@ -4201,7 +4202,7 @@ describe("server/cli.ts controller commands", () => {
 
 		it("never reaches the production unit's ExecStart", () => {
 			const unit = readFileSync(
-				new URL("../server/factory.service", import.meta.url),
+				new URL("../host/install/factory.service", import.meta.url),
 				"utf8",
 			);
 
@@ -4210,7 +4211,7 @@ describe("server/cli.ts controller commands", () => {
 				.filter((line) => line.startsWith("ExecStart"));
 
 			assert.equal(exec.length, 1);
-			assert.match(exec[0] ?? "", /server\/cli\.ts serve /);
+			assert.match(exec[0] ?? "", /host\/cli\/index\.ts serve /);
 			assert.doesNotMatch(unit, /verification/);
 		});
 	});
@@ -10296,7 +10297,7 @@ describe("acquireLock", () => {
 	});
 
 	it("lets exactly one of two controller processes started together win, across 10 trials", async () => {
-		const controller = new URL("../server/controller/lock.ts", import.meta.url)
+		const controller = new URL("../host/controller/lock.ts", import.meta.url)
 			.href;
 
 		const script = `
@@ -19270,11 +19271,11 @@ function freshProcess(
 	const modules = {
 		orchestrator: new URL("../src/controller/orchestrator.ts", import.meta.url)
 			.href,
-		controller: new URL("../server/controller/run-files.ts", import.meta.url)
+		controller: new URL("../host/controller/run-files.ts", import.meta.url)
 			.href,
 		admission: new URL("../src/trust/admission.ts", import.meta.url).href,
 		fake: new URL("./fake-ticket-adapter.ts", import.meta.url).href,
-		result: new URL("../server/sandbox/result.ts", import.meta.url).href,
+		result: new URL("../host/sandbox/result.ts", import.meta.url).href,
 		platform: new URL("../src/trust/platform.ts", import.meta.url).href,
 	};
 

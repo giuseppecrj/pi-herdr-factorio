@@ -18,14 +18,14 @@ those drives actually run.
 
 ## How to get to it (user POV)
 
-Use `node server/cli.ts replay check --json` with full local revision pins. Use `replay report` for captured rows. A live pair needs separate fixture, spend, bundle, and production-stop grants. The layout program does not authorize replay on the retiring host. Read `../SKILL.md` before choosing a target.
+Use `node host/cli/index.ts replay check --json` with full local revision pins. Use `replay report` for captured rows. A live pair needs separate fixture, spend, bundle, and production-stop grants. The layout program does not authorize replay on the retiring host. Read `../SKILL.md` before choosing a target.
 
 ## Driving it with the named tooling
 
 ### Check the pins locally
 
 ```sh
-node server/cli.ts replay check --json \
+node host/cli/index.ts replay check --json \
   --main-sha "$MAIN_SHA" --previous-sha "$PREVIOUS_SHA" \
   --candidate-sha "$CANDIDATE_SHA" > replay-check.json
 TMPDIR=$(mktemp -d "${TMPDIR:-$HOME/.herdr/tmp}/factory-replay.XXXXXX") node --experimental-strip-types \
@@ -174,7 +174,7 @@ control SHA, grant, stage caps and stop disposition. Preserve it with the row.
 4. Compare both durable records and terminal rows:
 
    ```sh
-   node server/cli.ts replay report --json --case c3 \
+   node host/cli/index.ts replay report --json --case c3 \
      --previous-sha "$REPLAY_PREVIOUS_SHA" --candidate-sha "$REPLAY_CANDIDATE_SHA" \
      --previous-row "$PREVIOUS_ROW" --candidate-row "$CANDIDATE_ROW" \
      --previous-record "$PREVIOUS_LANE/replay.json" \

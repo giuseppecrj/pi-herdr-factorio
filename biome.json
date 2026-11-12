@@ -1,1 +1,1 @@
-{"files":{"includes":["**","!test/acceptance/**","!server/viewer/design/tokens.json","!server/viewer/design/tokens.css"]}}
+{"files":{"includes":["**","!test/acceptance/**","!host/viewer/design/tokens.json","!host/viewer/design/tokens.css"]}}

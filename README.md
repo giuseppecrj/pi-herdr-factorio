@@ -13,7 +13,7 @@ Each folder has a `README.md` that says what belongs in it and where new files g
 | Folder | What it holds |
 | --- | --- |
 | `src/` | The factory's rules: runs, stages, contracts, the ledger and the controller's decisions. |
-| `server/` | Host execution: the CLI, controller loop, sandboxes, gateway, gates, viewer and installer. |
+| `host/` | Host execution: the CLI, controller loop, sandboxes, gateway, gates, viewer and installer. |
 | `extension/` | The Pi extension that adds `/factory`. |
 | `skills/` | Stage skills that ship in the sandbox bundle. |
 | `test/` | Tests, fixtures and published held-out suites. |

@@ -13,10 +13,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { EXIT, runCli } from "../server/cli.ts";
-import { checkReplayBundles } from "../server/cli/replay.ts";
-import { acquireLock, procTable } from "../server/controller/lock.ts";
-import { manifestDigest } from "../server/sandbox/manifest.ts";
+import { EXIT } from "../host/cli/platform.ts";
+import { runCli } from "../host/cli/index.ts";
+import { checkReplayBundles } from "../host/cli/replay.ts";
+import { acquireLock, procTable } from "../host/controller/lock.ts";
+import { manifestDigest } from "../host/bundle/manifest.ts";
 import { parseWorkflow } from "../src/config/parse.ts";
 import { isGitSha } from "../src/config/schema.ts";
 import { digestOf } from "../src/core/run.ts";
@@ -377,6 +378,39 @@ describe("replay corpus and read-only check", () => {
 		});
 
 		assert.equal(result.cases[0]?.status, "ready");
+	});
+
+	it("L13 watches the current viewer owner for the frozen server/viewer.ts corpus path", async () => {
+		const corpus = await loadReplayCorpus(corpusDir);
+		const viewerPaths: string[][] = [];
+
+		const result = await checkReplay({
+			corpus,
+			mainSha: sha,
+			previousSha: sha,
+			candidateSha: otherSha,
+			exec: async (_command, args) => {
+				if (args.includes("server/viewer.ts")) viewerPaths.push([...args]);
+
+				return {
+					code: 0,
+					stdout:
+						args[0] === "show"
+							? syntheticWorkflow
+							: args.includes("host/viewer/server.ts")
+								? "host/viewer/server.ts\n"
+								: "",
+					stderr: "",
+				};
+			},
+		});
+
+		assert.equal(result.cases[1]?.status, "stale");
+		assert.equal(viewerPaths.length, 1);
+		assert.deepEqual(viewerPaths[0]?.slice(-2), [
+			"server/viewer.ts",
+			"host/viewer/server.ts",
+		]);
 	});
 
 	it("CLI checks the local corpus without GitHub or model calls", async () => {
@@ -1105,8 +1139,8 @@ describe("review regressions: comparison identity and caps", () => {
 
 				return {
 					code: 0,
-					stdout: args.includes("server/provision.sh")
-						? "server/provision.sh\n"
+					stdout: args.includes("host/install/provision.sh")
+						? "host/install/provision.sh\n"
 						: "",
 					stderr: "",
 				};
@@ -1115,6 +1149,8 @@ describe("review regressions: comparison identity and caps", () => {
 
 		assert.deepEqual(paths, [
 			"skills",
+			"host/bundle/assets",
+			"host/install/provision.sh",
 			"server/sandbox/assets",
 			"server/provision.sh",
 		]);
@@ -1654,7 +1690,7 @@ describe("trusted replay policy and guards", () => {
 			assert.ok(
 				driver.indexOf(guard) >= 0 &&
 					driver.indexOf(guard) <
-						driver.indexOf("exec node server/cli.ts serve"),
+						driver.indexOf("exec node host/cli/index.ts serve"),
 				guard,
 			);
 		assert.match(driver, /--issue/);
@@ -1681,6 +1717,154 @@ describe("L05 installed bundle pins", () => {
 		return { root, assets };
 	}
 
+	it("L13 accepts only the reviewed relocation recipe pair and rejects same-layout changes and stale stage-init", async () => {
+		const { root, assets: initial } = await bundleRoot();
+		const repository = join(root, "repository");
+		await mkdir(repository);
+
+		const git = (...args: string[]) =>
+			execFileSync("git", ["-C", repository, ...args], {
+				encoding: "utf8",
+			}).trim();
+
+		const put = async (path: string, bytes: string) => {
+			await mkdir(join(repository, path, ".."), { recursive: true });
+			await writeFile(join(repository, path), bytes);
+		};
+
+		const commit = () => {
+			git("add", "-A");
+			git(
+				"-c",
+				"user.name=Layout",
+				"-c",
+				"user.email=layout@example.invalid",
+				"commit",
+				"-qm",
+				"layout fixture",
+			);
+
+			return git("rev-parse", "HEAD");
+		};
+
+		const execute: Exec = async (command, args) => {
+			try {
+				return {
+					code: 0,
+					stdout: execFileSync(command, ["-C", repository, ...args], {
+						encoding: "utf8",
+					}),
+					stderr: "",
+				};
+			} catch {
+				return { code: 1, stdout: "", stderr: "missing" };
+			}
+		};
+
+		try {
+			const oldRecipe = await readFile(
+				new URL("./fixtures/layout-host/old-provision.sh", import.meta.url),
+				"utf8",
+			);
+
+			const newRecipe = await readFile(
+				new URL("../host/install/provision.sh", import.meta.url),
+				"utf8",
+			);
+
+			assert.equal(
+				digestOf(oldRecipe),
+				"970b866bc26835ea435130320b0b5ed4a2c50fa393a0e4c94b1f7844134b91f2",
+			);
+			assert.equal(
+				digestOf(newRecipe),
+				"8b6dbcdc438bb3f77bfe88eb4ac4e1108d6e3547e32edd460a086a477c5d1846",
+			);
+			const installed = join(root, `assets-${initial}`);
+			await writeFile(join(installed, "sandbox/stage-init.ts"), "export {};\n");
+			const assets = await manifestDigest(installed);
+			assert.ok(assets);
+			await rename(installed, join(root, `assets-${assets}`));
+			await unlink(join(root, "current"));
+			await symlink(`assets-${assets}`, join(root, "current"));
+			git("init", "-q");
+			await put("skills/build/SKILL.md", skill);
+			await put("server/sandbox/assets/pi.ts", pi);
+			await put("server/sandbox/assets/stage-init.ts", "export {};\n");
+			await put("server/provision.sh", oldRecipe);
+			const previousSha = commit();
+			await put("server/provision.sh", `${oldRecipe}\nprintf changed\n`);
+			const oldChanged = commit();
+			assert.equal(
+				await refusal(root, assets, execute, {
+					previousSha,
+					candidateSha: oldChanged,
+				}),
+				"replay_bundle_recipe_mismatch",
+			);
+			await rm(join(repository, "server/provision.sh"));
+			await mkdir(join(repository, "host/bundle"), { recursive: true });
+			await rename(
+				join(repository, "server/sandbox/assets"),
+				join(repository, "host/bundle/assets"),
+			);
+			await put("host/install/provision.sh", newRecipe);
+			const candidateSha = commit();
+			assert.equal(
+				await refusal(root, assets, execute, { previousSha, candidateSha }),
+				"accepted",
+			);
+			assert.equal(
+				await refusal(root, assets, execute, {
+					previousSha: oldChanged,
+					candidateSha,
+				}),
+				"replay_bundle_recipe_mismatch",
+			);
+			await put("host/install/provision.sh", `${newRecipe}\nprintf changed\n`);
+			const newChanged = commit();
+			assert.equal(
+				await refusal(root, assets, execute, {
+					previousSha: candidateSha,
+					candidateSha: newChanged,
+				}),
+				"replay_bundle_recipe_mismatch",
+			);
+			await put("host/install/provision.sh", newRecipe);
+			await put(
+				"host/bundle/assets/stage-init.ts",
+				"export const changed = true;\n",
+			);
+			const staleSha = commit();
+			assert.equal(
+				await refusal(root, assets, execute, {
+					previousSha: candidateSha,
+					candidateSha: staleSha,
+				}),
+				"replay_stale_bundle",
+			);
+			const bundle = join(root, `assets-${assets}`);
+			await writeFile(
+				join(bundle, "sandbox/stage-init.ts"),
+				"export const installedChanged = true;\n",
+			);
+			const changedAssets = await manifestDigest(bundle);
+			assert.ok(changedAssets && changedAssets !== assets);
+			await rename(bundle, join(root, `assets-${changedAssets}`));
+			await unlink(join(root, "current"));
+			await symlink(`assets-${changedAssets}`, join(root, "current"));
+			assert.equal(
+				await refusal(root, changedAssets, execute, {
+					previousSha: candidateSha,
+					candidateSha,
+				}),
+				"replay_stale_bundle",
+			);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
 	function source(input: {
 		listed?: string;
 		listCode?: number;
@@ -1689,7 +1873,7 @@ describe("L05 installed bundle pins", () => {
 	}): Exec {
 		const files: Record<string, string> = input.files ?? {
 			"skills/build/SKILL.md": skill,
-			"server/sandbox/assets/pi.ts": pi,
+			"host/bundle/assets/pi.ts": pi,
 		};
 
 		return async (_command, args) => {
@@ -1701,7 +1885,12 @@ describe("L05 installed bundle pins", () => {
 				};
 
 			if (args[0] === "show") {
-				const text = files[String(args[1]).replace(/^[0-9a-f]{40}:/, "")];
+				const path = String(args[1]).replace(/^[0-9a-f]{40}:/, "");
+
+				const text =
+					path === "host/install/provision.sh"
+						? "unchanged recipe"
+						: files[path];
 
 				return text === undefined
 					? { code: 128, stdout: "", stderr: "missing" }
@@ -1773,7 +1962,7 @@ describe("L05 installed bundle pins", () => {
 						files: {
 							"skills/build/SKILL.md": skill,
 							"skills/review/SKILL.md": skill,
-							"server/sandbox/assets/pi.ts": pi,
+							"host/bundle/assets/pi.ts": pi,
 						},
 					}),
 				),
@@ -1786,7 +1975,7 @@ describe("L05 installed bundle pins", () => {
 					source({
 						files: {
 							"skills/build/SKILL.md": skill,
-							"server/sandbox/assets/pi.ts": "export const changed = 1;\n",
+							"host/bundle/assets/pi.ts": "export const changed = 1;\n",
 						},
 					}),
 				),
@@ -1796,7 +1985,7 @@ describe("L05 installed bundle pins", () => {
 				await refusal(
 					root,
 					assets,
-					source({ recipe: "server/provision.sh\n" }),
+					source({ recipe: "host/install/provision.sh\n" }),
 				),
 				"replay_bundle_recipe_mismatch",
 			);

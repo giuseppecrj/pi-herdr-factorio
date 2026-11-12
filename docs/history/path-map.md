@@ -95,4 +95,83 @@ Each row is bound to the pull request that made the move. Its squash commit on `
 | L12 | #760 | `server/sandbox.ts` | `server/sandbox/review.ts` | `runReview`, `prepareCandidateReview`, `candidateReviewInputs`, `readCapturedReview`, `reviewInputRecord`, `reviewVerdict` and `capturedReviewText` |
 | L12 | #760 | `server/sandbox.ts` | `server/sandbox/specify.ts` | `runSpecify`, `KeptSession` and `keptSession` |
 
+| L13 | #761 | `server/README.md` | `host/README.md` | The whole file |
+| L13 | #761 | `server/cli.ts` | `host/cli/cadence.ts` | `runCadenceCli` |
+| L13 | #761 | `server/cli.ts` | `host/cli/index.ts` | `ISSUE_NUMBER`, `Values`, `isControllerCommand`, `issuesOf`, `parseController`, `parse`, `parseCliArgs`, `controllerView`, `runCli` |
+| L13 | #761 | `server/cli.ts` | `host/cli/measurement.ts` | `runMeasurementCli` |
+| L13 | #761 | `server/cli.ts` | `host/cli/metrics.ts` | `defectIssueOf`, `validMetricInstant`, `readMetricDefects`, `MetricReview`, `INTERVENTION_UNREADABLE`, `readMetricPages`, `readMetricReviews`, `readMetricInterventions`, `readInterventionFixture`, `collectOwnerMetrics`, `runMetricsCli` |
+| L13 | #761 | `server/cli.ts` | `host/cli/owner-feed.ts` | `runOwnerFeedCli` |
+| L13 | #761 | `server/cli.ts` | `host/cli/platform.ts` | `USAGE`, `EXIT`, `ControllerRuntime`, `ExecutorContext`, `XDG_RUNTIME_DIR`, `CliIo`, `FETCH_TIMEOUT_MS`, `CONTROLLER_COMMANDS`, `ControllerCommand`, `Parsed`, `redactString`, `ControllerView`, `StatusOutput`, `Printable`, `json`, `isPrivateDirectory`, `realRuntime`, `execFile` |
+| L13 | #761 | `server/cli.ts` | `host/cli/replay.ts` | `runReplayCli` |
+| L13 | #761 | `server/cli.ts` | `host/cli/serve.ts` | `runController` |
+| L13 | #761 | `server/cli/measurement.ts` | `host/cli/measurement.ts` | The whole file |
+| L13 | #761 | `server/cli/owner-feed.ts` | `host/cli/owner-feed.ts` | The whole file |
+| L13 | #761 | `server/cli/replay.ts` | `host/cli/replay.ts` | The whole file |
+| L13 | #761 | `server/controller/README.md` | `host/controller/README.md` | The whole file |
+| L13 | #761 | `server/controller/cadence.ts` | `host/controller/cadence.ts` | The whole file |
+| L13 | #761 | `server/controller/candidate-port.ts` | `host/controller/candidate-port.ts` | The whole file |
+| L13 | #761 | `server/controller/checkers.ts` | `host/controller/checkers.ts` | The whole file |
+| L13 | #761 | `server/controller/checkout.ts` | `host/controller/checkout.ts` | The whole file |
+| L13 | #761 | `server/controller/lock.ts` | `host/controller/lock.ts` | The whole file |
+| L13 | #761 | `server/controller/measurement.ts` | `host/controller/measurement.ts` | The whole file |
+| L13 | #761 | `server/controller/outbox.ts` | `host/controller/outbox.ts` | The whole file |
+| L13 | #761 | `server/controller/run-files.ts` | `host/controller/run-files.ts` | The whole file |
+| L13 | #761 | `server/controller/serve-loop.ts` | `host/controller/serve-loop.ts` | The whole file |
+| L13 | #761 | `server/controller/state.ts` | `host/controller/state.ts` | The whole file |
+| L13 | #761 | `server/controller/terminal.ts` | `host/controller/terminal.ts` | The whole file |
+| L13 | #761 | `server/controller/validation-sweep.ts` | `host/controller/validation-sweep.ts` | The whole file |
+| L13 | #761 | `server/factory.service` | `host/install/factory.service` | The whole file |
+| L13 | #761 | `server/gates.ts` | `host/gates/base.ts` | `countsOf`, `privateExecution`, `parseDraftDetails`, `publicFailurePaths`, `heldoutProjection`, `baseTreeDigest`, `BaseRunInput`, `runHeldoutBase`, `runDraftBase`, `runBase`, `scanSuite`, `replayHeldoutCandidate` |
+| L13 | #761 | `server/gates.ts` | `host/gates/gates.ts` | `GATE_TEST_CONCURRENCY`, `GateCheck`, `GateReceipt`, `CandidateInput`, `sameCounts`, `receiptPasses`, `scanCandidate`, `checkCandidate`, `runGatesCli` |
+| L13 | #761 | `server/gates.ts` | `host/gates/manifest.ts` | `CHECK_NAMES`, `Dependency`, `GateManifest`, `specs`, `validateDependencies`, `readDependencies`, `manifestOf` |
+| L13 | #761 | `server/gates.ts` | `host/gates/materialize.ts` | `SOURCE`, `SHA`, `isDocumentation`, `CONFIG`, `git`, `safePath`, `entries`, `exportTree`, `replacementDigest`, `replacementsOf`, `Inventory`, `checkReplacements`, `overlay`, `materializeCandidate`, `inventory`, `materializeFromDirectories`, `heldoutDigest`, `heldoutOf` |
+| L13 | #761 | `server/gates.ts` | `host/gates/runner.ts` | `GATE_IMAGE`, `CLEAN_ENV`, `Result`, `RunInput`, `GateRunner`, `command`, `dockerRunner`, `localRunner`, `prefetch`, `install`, `testArgv`, `dependencyJobs`, `dependencyCache` |
+| L13 | #761 | `server/gates/draft-reporter.mjs` | `host/gates/draft-reporter.mjs` | The whole file |
+| L13 | #761 | `server/install-exe-dev.sh` | `host/install/install-exe-dev.sh` | The whole file |
+| L13 | #761 | `server/provision.sh` | `host/install/provision.sh` | The whole file |
+| L13 | #761 | `server/sandbox/assets/package-lock.json` | `host/bundle/assets/package-lock.json` | The whole file |
+| L13 | #761 | `server/sandbox/assets/package.json` | `host/bundle/assets/package.json` | The whole file |
+| L13 | #761 | `server/sandbox/assets/pi.ts` | `host/bundle/assets/pi.ts` | The whole file |
+| L13 | #761 | `server/sandbox/assets/stage-init.ts` | `host/bundle/assets/stage-init.ts` | The whole file |
+| L13 | #761 | `server/sandbox/audit.ts` | `host/gateway/audit.ts` | The whole file |
+| L13 | #761 | `server/sandbox/bwrap.ts` | `host/isolation/bwrap.ts` | The whole file |
+| L13 | #761 | `server/sandbox/control.ts` | `host/gateway/control.ts` | The whole file |
+| L13 | #761 | `server/sandbox/credentials.ts` | `host/gateway/credentials.ts` | The whole file |
+| L13 | #761 | `server/sandbox/echo-fixture.ts` | `host/gateway/echo-fixture.ts` | The whole file |
+| L13 | #761 | `server/sandbox/executor.ts` | `host/sandbox/executor.ts` | The whole file |
+| L13 | #761 | `server/sandbox/gateway-client.ts` | `host/gateway/client.ts` | The whole file |
+| L13 | #761 | `server/sandbox/gateway-main.ts` | `host/gateway/main.ts` | The whole file |
+| L13 | #761 | `server/sandbox/gateway.ts` | `host/gateway/gateway.ts` | The whole file |
+| L13 | #761 | `server/sandbox/launch.ts` | `host/sandbox/launch.ts` | The whole file |
+| L13 | #761 | `server/sandbox/lines.ts` | `host/sandbox/lines.ts` | The whole file |
+| L13 | #761 | `server/sandbox/manifest.ts` | `host/bundle/manifest.ts` | The whole file |
+| L13 | #761 | `server/sandbox/meter.ts` | `host/gateway/meter.ts` | The whole file |
+| L13 | #761 | `server/sandbox/policy.ts` | `host/gateway/policy.ts` | The whole file |
+| L13 | #761 | `server/sandbox/preflight.ts` | `host/isolation/preflight.ts` | The whole file |
+| L13 | #761 | `server/sandbox/receipts.ts` | `host/sandbox/receipts.ts` | The whole file |
+| L13 | #761 | `server/sandbox/result.ts` | `host/sandbox/result.ts` | The whole file |
+| L13 | #761 | `server/sandbox/review.ts` | `host/sandbox/review.ts` | The whole file |
+| L13 | #761 | `server/sandbox/routes.ts` | `host/gateway/routes.ts` | The whole file |
+| L13 | #761 | `server/sandbox/rpc.ts` | `host/sandbox/rpc.ts` | The whole file |
+| L13 | #761 | `server/sandbox/run-stage.ts` | `host/sandbox/run-stage.ts` | The whole file |
+| L13 | #761 | `server/sandbox/scope.ts` | `host/isolation/scope.ts` | The whole file |
+| L13 | #761 | `server/sandbox/seccomp.ts` | `host/isolation/seccomp.ts` | The whole file |
+| L13 | #761 | `server/sandbox/settle.ts` | `host/sandbox/settle.ts` | The whole file |
+| L13 | #761 | `server/sandbox/specify.ts` | `host/sandbox/specify.ts` | The whole file |
+| L13 | #761 | `server/sandbox/visible-tests.ts` | `host/sandbox/visible-tests.ts` | The whole file |
+| L13 | #761 | `server/viewer.ts` | `host/viewer/server.ts` | The whole file |
+| L13 | #761 | `server/viewer/claim.ts` | `host/viewer/claim.ts` | The whole file |
+| L13 | #761 | `server/viewer/dashboard.ts` | `host/viewer/dashboard.ts` | The whole file |
+| L13 | #761 | `server/viewer/design/SOURCE` | `host/viewer/design/SOURCE` | The whole file |
+| L13 | #761 | `server/viewer/design/icons/NOTICE` | `host/viewer/design/icons/NOTICE` | The whole file |
+| L13 | #761 | `server/viewer/design/icons/icons.ts` | `host/viewer/design/icons/icons.ts` | The whole file |
+| L13 | #761 | `server/viewer/design/tokens.css` | `host/viewer/design/tokens.css` | The whole file |
+| L13 | #761 | `server/viewer/design/tokens.json` | `host/viewer/design/tokens.json` | The whole file |
+| L13 | #761 | `server/viewer/evidence.ts` | `host/viewer/evidence.ts` | The whole file |
+| L13 | #761 | `server/viewer/icon-192.png` | `host/viewer/icon-192.png` | The whole file |
+| L13 | #761 | `server/viewer/icon-512.png` | `host/viewer/icon-512.png` | The whole file |
+| L13 | #761 | `server/viewer/manifest.webmanifest` | `host/viewer/manifest.webmanifest` | The whole file |
+| L13 | #761 | `server/viewer/render.ts` | `host/viewer/render.ts` | The whole file |
+| L13 | #761 | `server/viewer/style.css` | `host/viewer/style.css` | The whole file |
+
 L00 moves no files.

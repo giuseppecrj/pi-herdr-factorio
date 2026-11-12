@@ -57,7 +57,7 @@ Follow the folder READMEs rather than infer ownership from a filename. The root 
 
 - Read `DESIGN.md` before viewer or dashboard UI work. It applies Shep's design system to Factorio.
 - Use tokens such as `var(--color-…)` and `var(--space-…)`, never raw colours.
-- Never hand-edit `server/viewer/design/tokens.css`. `scripts/design-tokens.mjs` generates it.
+- Never hand-edit `host/viewer/design/tokens.css`. `scripts/design-tokens.mjs` generates it.
 - Update tokens only with `node scripts/design-tokens.mjs sync --shep <dir>` from a pinned, committed Shep revision.
 
 ## Daily log

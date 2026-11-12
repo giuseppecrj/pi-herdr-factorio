@@ -65,7 +65,7 @@ export type CadenceReflection = {
 
 export const CADENCE_PATH_GROUPS = [
 	["src"],
-	["server"],
+	["host"],
 	["test"],
 	["skills", CONTROL_PLANE_DIR, "AGENTS.md", "DESIGN.md"],
 	[
@@ -164,7 +164,7 @@ export function cadenceEligiblePath(path: string): boolean {
 		) &&
 		!/(?:^|\/)(?:generated|__generated__)(?:\/|\.)/i.test(path) &&
 		!/\.(?:generated\.[^/]+|map|min\.[^/]+)$/.test(path) &&
-		!path.startsWith("server/viewer/design/tokens.") &&
+		!path.startsWith("host/viewer/design/tokens.") &&
 		!path.toLowerCase().startsWith(ACCEPTANCE_SUITE_PREFIX) &&
 		!/^test\/fixtures\//i.test(path) &&
 		!path.startsWith("research/") &&

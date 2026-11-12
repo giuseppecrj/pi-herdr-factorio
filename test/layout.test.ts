@@ -275,13 +275,13 @@ describe("layout guard", () => {
 			const root = scratch();
 			appendFileSync(
 				join(root, "src/core/run.ts"),
-				'export { readLock } from "../../server/controller/state.ts";\nimport "../../host/cli/index.ts";\n',
+				'export { readLock } from "../../host/controller/state.ts";\nimport "../../host/cli/index.ts";\nimport "../../host/missing.ts";\n',
 			);
 
 			const problems = layout(root, "imports");
 			includesMatch(
 				problems,
-				/src\/core\/run\.ts -> server\/controller\/state\.ts is a new reverse edge/,
+				/src\/core\/run\.ts -> host\/controller\/state\.ts is a new reverse edge/,
 			);
 			includesMatch(
 				problems,
@@ -289,7 +289,7 @@ describe("layout guard", () => {
 			);
 			includesMatch(
 				problems,
-				/src\/core\/run\.ts imports \.\.\/\.\.\/host\/cli\/index\.ts, but host\/cli\/index\.ts does not exist/,
+				/src\/core\/run\.ts imports \.\.\/\.\.\/host\/missing\.ts, but host\/missing\.ts does not exist/,
 			);
 		});
 
@@ -299,21 +299,21 @@ describe("layout guard", () => {
 				root,
 				"scripts/layout-baseline.json",
 				'"exceptions": []',
-				'"exceptions": [],\n\t\t"reverseEdges": ["src/maintenance/replay.ts -> server/sandbox/manifest.ts", "src/core/run.ts -> server/controller/state.ts"]',
+				'"exceptions": [],\n\t\t"reverseEdges": ["src/maintenance/replay.ts -> host/bundle/manifest.ts", "src/core/run.ts -> host/controller/state.ts"]',
 			);
 			appendFileSync(
 				join(root, "src/core/run.ts"),
-				'export { readLock } from "../../server/controller/state.ts";\n',
+				'export { readLock } from "../../host/controller/state.ts";\n',
 			);
 
 			const problems = layout(root, "imports");
 			includesMatch(
 				problems,
-				/reverseEdges lists .*src\/maintenance\/replay\.ts -> server\/sandbox\/manifest\.ts.*L05 retired the reverse-edge allowance/,
+				/reverseEdges lists .*src\/maintenance\/replay\.ts -> host\/bundle\/manifest\.ts.*L05 retired the reverse-edge allowance/,
 			);
 			includesMatch(
 				problems,
-				/src\/core\/run\.ts -> server\/controller\/state\.ts is a new reverse edge/,
+				/src\/core\/run\.ts -> host\/controller\/state\.ts is a new reverse edge/,
 			);
 		});
 
@@ -427,7 +427,7 @@ describe("layout guard", () => {
 		it("fails an unclassified file and a classified file that is gone", () => {
 			const root = scratch();
 			write(root, "src/unclassified.ts", "export const x = 1;\n");
-			rmSync(join(root, "server/viewer/icon-192.png"));
+			rmSync(join(root, "host/viewer/icon-192.png"));
 
 			const problems = layout(root, "classification");
 			includesMatch(
@@ -436,7 +436,7 @@ describe("layout guard", () => {
 			);
 			includesMatch(
 				problems,
-				/^classification: server\/viewer\/icon-192\.png is classified but missing/,
+				/^classification: host\/viewer\/icon-192\.png is classified but missing/,
 			);
 		});
 
@@ -496,7 +496,7 @@ describe("layout guard", () => {
 				root,
 				"scripts/layout-baseline.json",
 				/"files": \{\n/,
-				`"files": {\n\t\t\t"src/extracted.ts": { "owner": "src/core", "seats": ${seats}, "from": ["server/sandbox/json.ts", "src/gone.ts"], "since": "L03" },\n`,
+				`"files": {\n\t\t\t"src/extracted.ts": { "owner": "src/core", "seats": ${seats}, "from": ["host/sandbox/json.ts", "src/gone.ts"], "since": "L03" },\n`,
 			);
 
 			const problems = layout(root, "classification");
@@ -565,21 +565,21 @@ describe("layout guard", () => {
 
 		it("fails a reader whose relative root depth changes when it moves", () => {
 			const root = scratch();
-			mkdirSync(join(root, "server/cli"), { recursive: true });
+			mkdirSync(join(root, "host/cli/nested"), { recursive: true });
 			renameSync(
-				join(root, "server/cli.ts"),
-				join(root, "server/cli/index.ts"),
+				join(root, "host/cli/platform.ts"),
+				join(root, "host/cli/nested/platform.ts"),
 			);
 			edit(
 				root,
 				"scripts/layout-baseline.json",
-				'"reader": "server/cli.ts"',
-				'"reader": "server/cli/index.ts"',
+				'"reader": "host/cli/platform.ts"',
+				'"reader": "host/cli/nested/platform.ts"',
 			);
 
 			includesMatch(
 				layout(root, "readers"),
-				/^readers: cli-source-root: \.\. from server\/cli resolves to server, expected \.$/,
+				/^readers: cli-source-root: \.\.\/\.\. from host\/cli\/nested resolves to host, expected \.$/,
 			);
 		});
 
@@ -660,7 +660,7 @@ describe("layout guard", () => {
 				includesMatch(
 					layout(moved, "readers"),
 					new RegExp(
-						`^readers: visible-test-deadline: ${reader.replace(/\./g, "\\.")} lookup /.*VISIBLE_LIMIT_MS_MOVED.*/m? finds 0 declarations in server/sandbox/visible-tests\\.ts, expected exactly 1$`,
+						`^readers: visible-test-deadline: ${reader.replace(/\./g, "\\.")} lookup /.*VISIBLE_LIMIT_MS_MOVED.*/m? finds 0 declarations in host/sandbox/visible-tests\\.ts, expected exactly 1$`,
 					),
 				);
 
@@ -743,34 +743,36 @@ describe("layout guard", () => {
 					"src/candidate/validation.ts",
 					"src/contract/parse.ts",
 					"src/github/adapter.ts",
-					"server/sandbox/review.ts",
-					"server/gates.ts",
+					"host/sandbox/review.ts",
+					"host/gates/materialize.ts",
+					"host/gates/base.ts",
 				],
 			},
 			{
 				category: "trusted gate files",
 				target: ".github/factory/gates/scan-rules.json",
 				expect: [
-					/^literals: server\/gates\.ts:\d+ names \.github\/factory\/gates\/scan-rules\.json, which does not exist/,
+					/^literals: host\/gates\/gates\.ts:\d+ names \.github\/factory\/gates\/scan-rules\.json, which does not exist/,
 				],
 			},
 			{
 				category: "trusted gate manifest",
 				target: ".github/factory/gates",
 				expect: [
-					/^literals: server\/gates\.ts:\d+ names \.github\/factory\/gates\/gates\.json, which does not exist/,
-					/^literals: server\/controller\/checkers\.ts:\d+ names \.github\/factory\/gates, which does not exist/,
-					/^literals: server\/controller\/run-files\.ts:\d+ names \.github\/factory\/gates, which does not exist/,
-					/^literals: server\/controller\/validation-sweep\.ts:\d+ names \.github\/factory\/gates, which does not exist/,
+					/^literals: host\/gates\/manifest\.ts:\d+ names \.github\/factory\/gates\/gates\.json, which does not exist/,
+					/^literals: host\/controller\/checkers\.ts:\d+ names \.github\/factory\/gates, which does not exist/,
+					/^literals: host\/controller\/run-files\.ts:\d+ names \.github\/factory\/gates, which does not exist/,
+					/^literals: host\/controller\/validation-sweep\.ts:\d+ names \.github\/factory\/gates, which does not exist/,
 				],
 			},
 			{
 				category: "script roots",
-				target: "server/viewer/design",
+				title: "server/viewer/design",
+				target: "host/viewer/design",
 				expect: [
-					/^literals: scripts\/design-tokens\.mjs:\d+ names server\/viewer\/design, which does not exist/,
-					/^literals: src\/maintenance\/cadence\.ts:\d+ names server\/viewer\/design\/tokens\., which is the prefix of no file/,
-					/^literals: biome\.json:files\.includes\[2\] names server\/viewer\/design\/tokens\.json, which does not exist/,
+					/^literals: scripts\/design-tokens\.mjs:\d+ names host\/viewer\/design, which does not exist/,
+					/^literals: src\/maintenance\/cadence\.ts:\d+ names host\/viewer\/design\/tokens\., which is the prefix of no file/,
+					/^literals: biome\.json:files\.includes\[2\] names host\/viewer\/design\/tokens\.json, which does not exist/,
 				],
 			},
 			{
@@ -800,7 +802,7 @@ describe("layout guard", () => {
 		] as const;
 
 		for (const move of moves)
-			it(`fails ${move.category} when ${move.target} moves`, () => {
+			it(`fails ${move.category} when ${"title" in move ? move.title : move.target} moves`, () => {
 				const root = scratch();
 				renameSync(join(root, move.target), join(root, `${move.target}.moved`));
 				const problems = layout(root, "literals");
@@ -888,11 +890,11 @@ describe("layout guard", () => {
 			);
 			edit(
 				root,
-				"server/factory.service",
-				"node server/cli.ts serve",
+				"host/install/factory.service",
 				"node host/cli/index.ts serve",
+				"node host/cli/missing.ts serve",
 			);
-			rmSync(join(root, "server/provision.sh"));
+			rmSync(join(root, "host/install/provision.sh"));
 			write(
 				root,
 				".pi/skills/verify-factory/scripts/new-driver.sh",
@@ -906,15 +908,15 @@ describe("layout guard", () => {
 			);
 			includesMatch(
 				problems,
-				/^shell: server\/factory\.service no longer has path token server\/cli\.ts$/,
+				/^shell: host\/install\/factory\.service no longer has path token host\/cli\/index\.ts$/,
 			);
 			includesMatch(
 				problems,
-				/^shell: server\/factory\.service has unclassified path token host\/cli\/index\.ts$/,
+				/^shell: host\/install\/factory\.service has unclassified path token host\/cli\/missing\.ts$/,
 			);
 			includesMatch(
 				problems,
-				/^shell: server\/install-exe-dev\.sh token server\/provision\.sh names server\/provision\.sh, which is missing, expected file$/,
+				/^shell: host\/install\/install-exe-dev\.sh token host\/install\/provision\.sh names host\/install\/provision\.sh, which is missing, expected file$/,
 			);
 			includesMatch(
 				problems,
@@ -924,7 +926,10 @@ describe("layout guard", () => {
 
 		it("fails workflow and scripts shell tokens whose targets move", () => {
 			const root = scratch();
-			renameSync(join(root, "server/cli.ts"), join(root, "server/cli.moved"));
+			renameSync(
+				join(root, "host/cli/index.ts"),
+				join(root, "host/cli/index.moved"),
+			);
 			renameSync(
 				join(root, "research/PROVENANCE.md"),
 				join(root, "research/PROVENANCE.moved"),
@@ -933,7 +938,7 @@ describe("layout guard", () => {
 			const problems = layout(root, "shell");
 			includesMatch(
 				problems,
-				/^shell: \.github\/workflows\/ci\.yml token server\/cli\.ts names server\/cli\.ts, which is missing, expected file$/,
+				/^shell: \.github\/workflows\/ci\.yml token host\/cli\/index\.ts names host\/cli\/index\.ts, which is missing, expected file$/,
 			);
 			includesMatch(
 				problems,
@@ -946,25 +951,25 @@ describe("layout guard", () => {
 			const script = ".pi/skills/verify-factory/scripts/drive-replay.sh";
 			appendFileSync(
 				join(root, script),
-				"node --input-type=module - <<'NODE'\nimport { readLock } from './server/controller/state.ts';\nNODE\n",
+				"node --input-type=module - <<'NODE'\nimport { readLock } from './host/controller/state.ts';\nNODE\n",
 			);
 			edit(
 				root,
 				"scripts/layout-baseline.json",
 				`"${script}": {\n\t\t\t\t"tokens": {`,
-				`"${script}": {\n\t\t\t\t"imports": { "./server/controller/state.ts": ["readLock"] },\n\t\t\t\t"tokens": {\n\t\t\t\t\t"./server/controller/state.ts": { "path": "server/controller/state.ts", "type": "file" },`,
+				`"${script}": {\n\t\t\t\t"imports": { "./host/controller/state.ts": ["readLock"] },\n\t\t\t\t"tokens": {\n\t\t\t\t\t"./host/controller/state.ts": { "path": "host/controller/state.ts", "type": "file" },`,
 			);
 			assert.deepEqual(layout(root, "shell"), []);
 			edit(
 				root,
-				"server/controller/state.ts",
+				"host/controller/state.ts",
 				"export async function readLock(",
 				"async function readLock(",
 			);
 
 			includesMatch(
 				layout(root, "shell"),
-				/^shell: \.pi\/skills\/verify-factory\/scripts\/drive-replay\.sh imports readLock from \.\/server\/controller\/state\.ts, but server\/controller\/state\.ts does not export it$/,
+				/^shell: \.pi\/skills\/verify-factory\/scripts\/drive-replay\.sh imports readLock from \.\/host\/controller\/state\.ts, but host\/controller\/state\.ts does not export it$/,
 			);
 		});
 	});
@@ -1070,14 +1075,14 @@ describe("layout guard", () => {
 			const prefix = scratch();
 			edit(
 				prefix,
-				"server/gates.ts",
+				"host/gates/materialize.ts",
 				'path.startsWith("test/") &&\n\t\t\t(!base.has(path)',
 				'path.startsWith("tests/") &&\n\t\t\t(!base.has(path)',
 			);
 
 			includesMatch(
 				layout(prefix, "discovery"),
-				/^discovery: server\/gates\.ts has 0 of the trusted test predicate "path\.startsWith\(\\"test\/\\"\) && .*", expected 1/,
+				/^discovery: host\/gates\/materialize\.ts has 0 of the trusted test predicate "path\.startsWith\(\\"test\/\\"\) && .*", expected 1/,
 			);
 
 			const twice = scratch();
@@ -1095,13 +1100,13 @@ describe("layout guard", () => {
 
 			const moved = scratch();
 			renameSync(
-				join(moved, "server/gates.ts"),
-				join(moved, "server/gates.moved"),
+				join(moved, "host/gates/manifest.ts"),
+				join(moved, "host/gates/manifest.moved"),
 			);
 
 			includesMatch(
 				layout(moved, "discovery"),
-				/^discovery: server\/gates\.ts is missing, so the trusted test selection cannot be checked; audit the moved or changed test selection code, then update discovery\.trusted\.materializer and discovery\.trusted\.predicates in scripts\/layout-baseline\.json$/,
+				/^discovery: host\/gates\/manifest\.ts is missing, so the trusted test selection cannot be checked; audit the moved or changed test selection code, then update discovery\.trusted\.materializer and discovery\.trusted\.predicates in scripts\/layout-baseline\.json$/,
 			);
 
 			const nested = scratch();
@@ -1130,7 +1135,7 @@ describe("layout guard", () => {
 			);
 			includesMatch(
 				split,
-				/^discovery: \.github\/factory\/gates\/gates\.json testGlob test\/fixtures\/\*\*\/\*\.test\.ts is refused by server\/gates\.ts/,
+				/^discovery: \.github\/factory\/gates\/gates\.json testGlob test\/fixtures\/\*\*\/\*\.test\.ts is refused by host\/gates\/manifest\.ts/,
 			);
 		});
 	});

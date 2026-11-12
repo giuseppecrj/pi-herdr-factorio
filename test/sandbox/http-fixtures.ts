@@ -6,7 +6,7 @@ import {
 	startEchoFixture as startEcho,
 	type AnthropicReplay,
 	type EchoFixture,
-} from "../../server/sandbox/echo-fixture.ts";
+} from "../../host/gateway/echo-fixture.ts";
 
 export async function startEchoFixture(
 	context: TestContext | SuiteContext,

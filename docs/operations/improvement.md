@@ -34,8 +34,8 @@ The scorer digest covers the prompt, sorted label map, passing threshold and gra
 ## Score and re-score
 
 ```sh
-node server/cli.ts score --run "$RUN_ID" --repo nublai/pi-herdr-factorio --state-dir "$STATE"
-node server/cli.ts score --run "$RUN_ID" --repo nublai/pi-herdr-factorio --state-dir "$STATE" --json
+node host/cli/index.ts score --run "$RUN_ID" --repo nublai/pi-herdr-factorio --state-dir "$STATE"
+node host/cli/index.ts score --run "$RUN_ID" --repo nublai/pi-herdr-factorio --state-dir "$STATE" --json
 ```
 
 Add `--scorer <id>` to select another declared scorer. A second command is a new measurement. It appends an event superseding the previous result; `latestScores` projects the latest, while `parseScores` and `scoreHistory` retain history. The event's frozen `passingScore` decides whether its numeric score passes. A passing measurement cannot revive a failed run or veto a successful one.
@@ -57,7 +57,7 @@ Every proposal starts with F12a's primary-metric status from the local `metrics.
 `reflect` is Friday's weekly cadence job. It uses `reflect-ledger` and `agent-loop-spec` in one no-tools sandbox request. Its inputs are bounded redacted ledger rows, the latest local score projection and pinned source lines, never private transcripts. Ledger fields, score-event IDs, receipt digests and repository ranges must exist in its frozen excerpt. The controller removes unsupported citations and deduplicates proposed issues, including closed findings.
 
 ```sh
-node server/cli.ts cadence --once --job reflect --json \
+node host/cli/index.ts cadence --once --job reflect --json \
   --repo nublai/pi-herdr-factorio --state-dir "$STATE"
 ```
 
@@ -84,8 +84,8 @@ The trigger calls no model and reserves no sandbox slot. It shares F11's intent-
 ## Explain a run
 
 ```sh
-node server/cli.ts explain --run "$RUN_ID" --repo nublai/pi-herdr-factorio --state-dir "$STATE"
-node server/cli.ts explain --run "$RUN_ID" --repo nublai/pi-herdr-factorio --state-dir "$STATE" --json
+node host/cli/index.ts explain --run "$RUN_ID" --repo nublai/pi-herdr-factorio --state-dir "$STATE"
+node host/cli/index.ts explain --run "$RUN_ID" --repo nublai/pi-herdr-factorio --state-dir "$STATE" --json
 ```
 
 Explain accepts only the local frozen ledger row and digest-bound redacted stage receipts. It never reads output, stderr, raw sessions or private transcripts. Every finding must cite an existing ledger field, such as `ledger.failure`, or a supplied receipt path. Unambiguous nested paths such as `ledger.outcome.kind` flatten to their top-level field. A single JSON code fence is accepted, invalid findings or citations are dropped, and the report fails only when no valid finding remains. Text is printed as advice, never parsed as a command. No timer invokes explain, and it makes no GitHub write. It still reads trusted main configuration for the pinned grader.

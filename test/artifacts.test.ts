@@ -16,8 +16,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
-import { fileRunFiles } from "../server/controller/run-files.ts";
-import { bwrapArgv } from "../server/sandbox/bwrap.ts";
+import { fileRunFiles } from "../host/controller/run-files.ts";
+import { bwrapArgv } from "../host/isolation/bwrap.ts";
 import { isGitSha } from "../src/config/schema.ts";
 import {
 	ACCEPTANCE_MAX_BYTES,
@@ -854,7 +854,7 @@ describe("private acceptance artifacts", () => {
 		assert.ok(argv.includes("--unshare-all"));
 		assert.ok(argv.includes("--tmpfs"));
 		assert.ok(
-			!readFileSync("server/sandbox/bwrap.ts", "utf8").includes("acceptance"),
+			!readFileSync("host/isolation/bwrap.ts", "utf8").includes("acceptance"),
 		);
 	});
 });

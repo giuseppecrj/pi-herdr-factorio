@@ -14,14 +14,14 @@ repo=nublai/pi-herdr-factorio
 lane="/home/exedev/factory-verification/$pr-w$n"
 out="/tmp/swarm-$pr/worker-$n"
 mkdir -p "$out"
-[ -f "$lane/ws/server/cli.ts" ] || { echo "server/cli.ts missing from lane workspace" >&2; exit 2; }
+[ -f "$lane/ws/host/cli/index.ts" ] || { echo "host/cli/index.ts missing from lane workspace" >&2; exit 2; }
 chmod 700 "$lane/state"
 sha="$(cat "$lane/head-sha" 2>/dev/null || echo unknown)"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 args=()
 for issue in "$@"; do args+=(--issue "$issue"); done
-if [ "$mode" = tick ]; then cmd=(node server/cli.ts tick --once --json --repo "$repo" --state-dir "$lane/state" "${args[@]}")
-else cmd=(node server/cli.ts run --json --repo "$repo" --state-dir "$lane/state" "${args[@]}"); fi
+if [ "$mode" = tick ]; then cmd=(node host/cli/index.ts tick --once --json --repo "$repo" --state-dir "$lane/state" "${args[@]}")
+else cmd=(node host/cli/index.ts run --json --repo "$repo" --state-dir "$lane/state" "${args[@]}"); fi
 start="$(date -u +%FT%TZ)"
 t0=$(date +%s%N)
 (cd "$lane/ws" && "${cmd[@]}") > "$out/$mode-$stamp.json" 2> "$out/$mode-$stamp.log"

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const repo = fileURLToPath(new URL("../", import.meta.url));
 
 const css = readFileSync(
-	new URL("../server/viewer/design/tokens.css", import.meta.url),
+	new URL("../host/viewer/design/tokens.css", import.meta.url),
 	"utf8",
 );
 

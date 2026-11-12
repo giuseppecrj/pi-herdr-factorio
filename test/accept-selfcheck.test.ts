@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
-import { LineSplitter } from "../server/sandbox/lines.ts";
+import { LineSplitter } from "../host/sandbox/lines.ts";
 import { objectOf, parseJson, type JsonObject } from "../src/core/json.ts";
 
 test("pinned Pi 1.4.0 accepts a second prompt after settlement (scripted local transport, zero model calls)", {

@@ -19,7 +19,7 @@ Copy the **entire state directory**, normally `/home/exedev/factory-state`, rath
 
 Also keep the controller source checkout and its `.git` metadata, recording its exact commit and dirty state. This preserves any locally fetched `factory/ledger` ref or separate operator-maintained ledger checkout. The controller's authoritative ledger is the remote `factory/ledger` branch; its private recovery data is `state/ledger/`, not a second mutable ledger database. Preserve a separate ledger checkout too if the operator has one; record its location and SHA. A metrics snapshot alone is not a ledger backup.
 
-Record the configured workspace root if it lives outside the state directory and copy it with the same stopped-state procedure. Record `/var/lib/factory-sandbox/current` and the full target `assets-<digest>` directory, plus the source revision used by `server/provision.sh`. Rebuilding at a later revision does not reproduce an old bundle. Preserve any older installed bundles still named by retained runs. Save the service unit, its overrides and non-secret environment configuration. Private Pi configuration belongs in the encrypted backup, never a public repository. Do not copy agent sockets, `/run` sockets, credentials from memory, or tokens into an evidence report.
+Record the configured workspace root if it lives outside the state directory and copy it with the same stopped-state procedure. Record `/var/lib/factory-sandbox/current` and the full target `assets-<digest>` directory, plus the source revision used by `host/install/provision.sh`. Rebuilding at a later revision does not reproduce an old bundle. Preserve any older installed bundles still named by retained runs. Save the service unit, its overrides and non-secret environment configuration. Private Pi configuration belongs in the encrypted backup, never a public repository. Do not copy agent sockets, `/run` sockets, credentials from memory, or tokens into an evidence report.
 
 `controller.lock` is only a PID/start-time description. The abstract Unix socket is the authority and cannot be backed up. Gateway sockets are also transient. The next controller replaces a stale lock description and reconciles owned processes before dispatch.
 
@@ -40,7 +40,7 @@ Record the configured workspace root if it lives outside the state directory and
    tar --acls --xattrs --numeric-owner --one-file-system \
      -cpf "$BACKUP/state.tar" -C "$(dirname "$STATE")" "$(basename "$STATE")"
    sha256sum "$BACKUP/state.tar" > "$BACKUP/state.tar.sha256"
-   node /home/exedev/pi-herdr-factorio/server/cli.ts status --json \
+   node /home/exedev/pi-herdr-factorio/host/cli/index.ts status --json \
      --repo nublai/pi-herdr-factorio --state-dir "$STATE" > "$BACKUP/status.json"
    ```
 
@@ -50,7 +50,7 @@ Record the configured workspace root if it lives outside the state directory and
 
 ## Restore onto a provisioned VM
 
-1. Ensure the old controller cannot run. Provision a replacement from the recorded source revision with `server/provision.sh`, under the VM-change grant. Restore the exact retained sandbox bundles or verify rebuilt manifest digests match; select the recorded bundle only under authorization. Set up the repository-scoped exe.dev integration as documented, not by copying a GitHub token.
+1. Ensure the old controller cannot run. Provision a replacement from the recorded source revision with `host/install/provision.sh`, under the VM-change grant. Restore the exact retained sandbox bundles or verify rebuilt manifest digests match; select the recorded bundle only under authorization. Set up the repository-scoped exe.dev integration as documented, not by copying a GitHub token.
 2. Verify the archive checksum, then extract into a new private scratch parent, **not over a running state directory**. Use `tar --acls --xattrs --numeric-owner -xpf state.tar -C "$RESTORE_PARENT"`. Restore the source checkout, external workspaces, service configuration and bundle pins too. Use the same service UID where possible. If the UID changed, explicitly restore ownership to the service user while retaining the original file modes. Do not follow symlinks or make private evidence world-readable to get past a failed check.
 3. Confirm every regular file and its relative path, mode and checksum matches the backup. Keep `disabled` present. Do not delete claims, receipts, candidate books, verification pins, ledger jobs or accounting records to make startup succeed. Do not restore an older controller over newer marker/book formats.
 4. Before starting, read `status --json` against the restored directory and compare with the stopped source's saved status using the same checkout and trusted workflow. PID/start time may differ; claim identity, stage, usage, caps, attention, durable accounting and ledger backlog must not. Missing GitHub access is a blocked comparison, not a match. Also inspect `owner-feed --json`, which needs no remote access. A stale or missing `metrics.json` only leaves the dashboard metric Pending; it does not erase ledger facts.

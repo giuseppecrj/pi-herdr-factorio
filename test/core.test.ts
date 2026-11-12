@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { stageResult, type StageReceipt } from "../server/sandbox/result.ts";
+import { stageResult, type StageReceipt } from "../host/sandbox/result.ts";
 import type { ModelId } from "../src/config/schema.ts";
 import {
 	aggregateEfficiency,

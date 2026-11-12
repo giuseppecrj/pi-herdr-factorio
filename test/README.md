@@ -4,7 +4,7 @@
 
 | Path | What it holds |
 | --- | --- |
-| `<name>.test.ts` | Tests for `src/<name>.ts` or `server/<name>.ts`, plus cross-module tests such as `pipeline.test.ts`. |
+| `<name>.test.ts` | Tests for modules under `src/` or `host/`, plus cross-module tests such as `pipeline.test.ts`. |
 | `sandbox.test.ts`, `sandbox/*.cases.ts` | Sandbox and gateway cases. `sandbox.test.ts` imports each `.cases.ts` file once. Other files in `sandbox/` are helpers. |
 | `integration/` | Slow tests that drive real scripts, such as the replay driver. |
 | `fixtures/` | Data that tests read: corpora, patches, captures and snapshots. Nothing here runs on its own. |

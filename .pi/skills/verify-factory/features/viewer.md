@@ -8,7 +8,7 @@
 
 ## How to get to it (user POV)
 
-Run `node server/cli.ts viewer --state-dir "$STATE" [--run "$RUN_ID"] [--port 8080]` against authorized private state. It binds loopback. Follow `docs/operations/viewer.md` for the separate owner-approved Tailscale route. Read the target restrictions in `../SKILL.md` first.
+Run `node host/cli/index.ts viewer --state-dir "$STATE" [--run "$RUN_ID"] [--port 8080]` against authorized private state. It binds loopback. Follow `docs/operations/viewer.md` for the separate owner-approved Tailscale route. Read the target restrictions in `../SKILL.md` first.
 
 ## Driving it with the named tooling
 

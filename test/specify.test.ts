@@ -19,8 +19,8 @@ import {
 	checkoutWorkspace,
 	ghTarball,
 	readTarball,
-} from "../server/controller/checkout.ts";
-import { fileRunFiles } from "../server/controller/run-files.ts";
+} from "../host/controller/checkout.ts";
+import { fileRunFiles } from "../host/controller/run-files.ts";
 import { buildPrompt } from "../src/candidate/build.ts";
 import { type GitSha, isGitSha } from "../src/config/schema.ts";
 import {

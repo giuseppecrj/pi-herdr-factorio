@@ -12,17 +12,17 @@ import { join, resolve } from "node:path";
 import {
 	checkoutWorkspace,
 	ghTarball,
-} from "../../../../../server/controller/checkout.ts";
-import { fileRunFiles } from "../../../../../server/controller/run-files.ts";
-import { launchSandbox } from "../../../../../server/sandbox/launch.ts";
+} from "../../../../../host/controller/checkout.ts";
+import { fileRunFiles } from "../../../../../host/controller/run-files.ts";
+import { launchSandbox } from "../../../../../host/sandbox/launch.ts";
 import {
 	locateBundle,
 	SANDBOX_ROOT,
-} from "../../../../../server/sandbox/executor.ts";
-import { startGatewayProcess } from "../../../../../server/sandbox/gateway-client.ts";
-import { builtinTable } from "../../../../../server/sandbox/routes.ts";
-import { stopScopeArgv } from "../../../../../server/sandbox/scope.ts";
-import { detectArch } from "../../../../../server/sandbox/seccomp.ts";
+} from "../../../../../host/sandbox/executor.ts";
+import { startGatewayProcess } from "../../../../../host/gateway/client.ts";
+import { builtinTable } from "../../../../../host/gateway/routes.ts";
+import { stopScopeArgv } from "../../../../../host/isolation/scope.ts";
+import { detectArch } from "../../../../../host/isolation/seccomp.ts";
 import {
 	prepareRepairTree,
 	readPatch,

@@ -1,6 +1,6 @@
 # serve
 
-`node server/cli.ts serve` is the controller daemon. It takes the lock, checks that `gh` acts as `exe-dev-github-integration[bot]`, logs `event=controller_ready`, then runs one tick every `polling.interval_ms` (30 seconds) until SIGTERM or SIGINT. A stop lets the current tick finish and removes the lock. The command reference is the "Controller" section of `docs/operations/factory-cli.md`. `server/factory.service` runs it under systemd; nothing installs that unit automatically.
+`node host/cli/index.ts serve` is the controller daemon. It takes the lock, checks that `gh` acts as `exe-dev-github-integration[bot]`, logs `event=controller_ready`, then runs one tick every `polling.interval_ms` (30 seconds) until SIGTERM or SIGINT. A stop lets the current tick finish and removes the lock. The command reference is the "Controller" section of `docs/operations/factory-cli.md`. `host/install/factory.service` runs it under systemd; nothing installs that unit automatically.
 
 ## Sub-features
 
@@ -12,7 +12,7 @@
 
 ## How to get to it (user POV)
 
-- `node server/cli.ts serve --repo nublai/pi-herdr-factorio --state-dir <dir> --issue <n>...`
+- `node host/cli/index.ts serve --repo nublai/pi-herdr-factorio --state-dir <dir> --issue <n>...`
 
 ## Driving it with ssh
 

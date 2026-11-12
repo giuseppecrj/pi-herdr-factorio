@@ -4,13 +4,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { startViewer } from "../server/viewer.ts";
+import { startViewer } from "../host/viewer/server.ts";
 
 const read = (path: string) =>
 	readFileSync(new URL(path, import.meta.url), "utf8");
 
-const css = read("../server/viewer/style.css").replace(/\/\*[\s\S]*?\*\//g, "");
-const tokens = read("../server/viewer/design/tokens.css");
+const css = read("../host/viewer/style.css").replace(/\/\*[\s\S]*?\*\//g, "");
+const tokens = read("../host/viewer/design/tokens.css");
 
 /** Every `property: value` in the sheet, innermost blocks included. */
 function declarations(sheet: string): { prop: string; value: string }[] {
@@ -141,7 +141,7 @@ test("the served style.css starts with the exact token sheet and keeps the secur
 		);
 		assert.equal(
 			await response.text(),
-			`${tokens}\n${read("../server/viewer/style.css")}`,
+			`${tokens}\n${read("../host/viewer/style.css")}`,
 		);
 		assert.equal(response.headers.get("cache-control"), "no-store");
 		assert.equal(response.headers.get("x-content-type-options"), "nosniff");
@@ -172,7 +172,7 @@ interface Tokens {
 	};
 }
 
-const json: Tokens = JSON.parse(read("../server/viewer/design/tokens.json"));
+const json: Tokens = JSON.parse(read("../host/viewer/design/tokens.json"));
 
 const hex = (value: string): number[] =>
 	[1, 3, 5].map((i) => Number.parseInt(value.slice(i, i + 2), 16));

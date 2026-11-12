@@ -12,17 +12,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { factoryCommandText, registerFactory } from "../extension/index.ts";
-import { EXIT, runCli } from "../server/cli.ts";
-import { fileRunFiles } from "../server/controller/run-files.ts";
-import { writeStatus } from "../server/controller/state.ts";
-import { readStatus } from "../server/controller/state.ts";
-import { parseEvent } from "../server/sandbox/control.ts";
+import { EXIT } from "../host/cli/platform.ts";
+import { runCli } from "../host/cli/index.ts";
+import { fileRunFiles } from "../host/controller/run-files.ts";
+import { writeStatus } from "../host/controller/state.ts";
+import { readStatus } from "../host/controller/state.ts";
+import { parseEvent } from "../host/gateway/control.ts";
 import {
 	buildUpstreamHeaders,
 	parseCeilings,
-} from "../server/sandbox/credentials.ts";
-import { startGatewayProcess } from "../server/sandbox/gateway-client.ts";
-import { decideHead, type RequestHead } from "../server/sandbox/policy.ts";
+} from "../host/gateway/credentials.ts";
+import { startGatewayProcess } from "../host/gateway/client.ts";
+import { decideHead, type RequestHead } from "../host/gateway/policy.ts";
 import {
 	builtinTable,
 	credentialId,
@@ -30,7 +31,7 @@ import {
 	parseRouteTable,
 	type Route,
 	type RouteTable,
-} from "../server/sandbox/routes.ts";
+} from "../host/gateway/routes.ts";
 import { parseWorkflow } from "../src/config/parse.ts";
 import { type GitSha, isGitSha } from "../src/config/schema.ts";
 import type { JsonValue } from "../src/core/json.ts";
@@ -1189,8 +1190,7 @@ describe("exmach model routes", () => {
 				const child = spawn(
 					process.execPath,
 					[
-						new URL("../server/sandbox/gateway-main.ts", import.meta.url)
-							.pathname,
+						new URL("../host/gateway/main.ts", import.meta.url).pathname,
 						"--socket",
 						join(root, "c.sock"),
 						"--audit",

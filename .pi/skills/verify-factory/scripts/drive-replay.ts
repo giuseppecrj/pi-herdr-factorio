@@ -60,7 +60,7 @@ async function owned(): Promise<void> {
 		const at = argv.indexOf("--state-dir");
 
 		process.exit(
-			argv.includes("server/cli.ts") &&
+			argv.includes("host/cli/index.ts") &&
 				argv.includes("serve") &&
 				at >= 0 &&
 				argv[at + 1] === state
@@ -74,7 +74,7 @@ async function owned(): Promise<void> {
 
 async function visibleLimit(): Promise<void> {
 	const limit = (
-		await readFile(join(arg(0), "server/sandbox/visible-tests.ts"), "utf8")
+		await readFile(join(arg(0), "host/sandbox/visible-tests.ts"), "utf8")
 	).match(/^export const VISIBLE_LIMIT_MS = ([\d_]+);$/m)?.[1];
 
 	if (limit === undefined) throw Error("visible-test deadline not found");
@@ -82,7 +82,7 @@ async function visibleLimit(): Promise<void> {
 }
 
 async function productionFree(): Promise<void> {
-	const { readLock } = await import("../../../../server/controller/state.ts");
+	const { readLock } = await import("../../../../host/controller/state.ts");
 
 	const state = arg(0);
 	const lock = await readLock(state);
@@ -121,7 +121,7 @@ async function settle(): Promise<void> {
 		{ objectOf, parseJson },
 	] = await Promise.all([
 		import("../../../../src/maintenance/replay.ts"),
-		import("../../../../server/controller/terminal.ts"),
+		import("../../../../host/controller/terminal.ts"),
 		import("../../../../src/core/run.ts"),
 		import("../../../../src/trust/platform.ts"),
 		import("../../../../src/core/json.ts"),
@@ -439,7 +439,7 @@ async function journal(): Promise<void> {
 // Preflight executes trusted-main code, not either factory's implementation.
 async function preflight(): Promise<void> {
 	const { sandboxExecutor } = await import(
-		"../../../../server/sandbox/executor.ts"
+		"../../../../host/sandbox/executor.ts"
 	);
 
 	const profile = await platformProfile();

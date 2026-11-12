@@ -218,11 +218,11 @@ Agents use only `factory-verify@<guest-tailnet-name>` with the dedicated key `/h
 
 **Files.**
 
-- [ ] Edit `src/trust/platform.ts`, `server/sandbox/routes.ts`, `server/sandbox/credentials.ts`, `server/sandbox/gateway-main.ts`, `server/sandbox/gateway-client.ts`, and `server/sandbox/control.ts`.
-- [ ] Edit `server/sandbox.ts`, `server/cli.ts`, and `src/config/{schema,parse,load,views}.ts` only to carry the profile and credential references.
+- [ ] Edit `src/trust/platform.ts`, `host/gateway/routes.ts`, `host/gateway/credentials.ts`, `host/gateway/main.ts`, `host/gateway/client.ts`, and `host/gateway/control.ts`.
+- [ ] Edit `server/sandbox.ts`, `host/cli/index.ts`, and `src/config/{schema,parse,load,views}.ts` only to carry the profile and credential references.
 - [ ] Edit `test/platform.test.ts`, `test/workflow.test.ts`, and `test/sandbox/*.cases.ts` for the changed contracts.
 - [ ] Edit `docs/operations/platform.md` and `docs/operations/sandbox.md`.
-- [ ] Create `server/vm/ms-a2/factory.service` as the guest-only unit template with `LoadCredential=`. VM5 renders the actual UID and installs it. Leave `server/factory.service`, which `install-exe-dev.sh` copies, unchanged.
+- [ ] Create `server/vm/ms-a2/factory.service` as the guest-only unit template with `LoadCredential=`. VM5 renders the actual UID and installs it. Leave `host/install/factory.service`, which `install-exe-dev.sh` copies, unchanged.
 
 **Build.**
 
@@ -336,12 +336,12 @@ Agents use only `factory-verify@<guest-tailnet-name>` with the dedicated key `/h
 
 ## Provision the controller, bridge, and restricted orchestrator as one user (VM5)
 
-**Depends on.** VM1 and VM4. Reuse `server/install-exe-dev.sh` and `server/provision.sh` on main from #743, plus `docs/operations/install-exe-dev.md`. The installer remains exe.dev-only, not a command to run unchanged in the LXD guest. Shep's direct CLI feed reader, factory extension, and fixed launch profile are external prerequisites. #738's bot refusal and creation-time-label proof must pass before any orchestrated intake.
+**Depends on.** VM1 and VM4. Reuse `host/install/install-exe-dev.sh` and `host/install/provision.sh` on main from #743, plus `docs/operations/install-exe-dev.md`. The installer remains exe.dev-only, not a command to run unchanged in the LXD guest. Shep's direct CLI feed reader, factory extension, and fixed launch profile are external prerequisites. #738's bot refusal and creation-time-label proof must pass before any orchestrated intake.
 
 **Files.**
 
-- [ ] Edit `server/provision.sh`, `server/vm/ms-a2/factory.service`, `server/cli.ts`, `server/sandbox.ts`, `server/sandbox/preflight.ts`, and `src/trust/platform.ts` for guest installation and service-user paths. Leave `server/factory.service` and the exe.dev installer's unit contract unchanged.
-- [ ] Create `server/shep-factory-bridge.service`, `server/vm/ms-a2/factory-orchestrator.service`, and `server/vm/ms-a2/orchestrator-launch.sh`. Install Shep's pinned factory-chat profile through `server/provision.sh`, without authoring Shep's extension or prompt here.
+- [ ] Edit `host/install/provision.sh`, `server/vm/ms-a2/factory.service`, `host/cli/index.ts`, `server/sandbox.ts`, `host/isolation/preflight.ts`, and `src/trust/platform.ts` for guest installation and service-user paths. Leave `host/install/factory.service` and the exe.dev installer's unit contract unchanged.
+- [ ] Create `server/shep-factory-bridge.service`, `server/vm/ms-a2/factory-orchestrator.service`, and `server/vm/ms-a2/orchestrator-launch.sh`. Install Shep's pinned factory-chat profile through `host/install/provision.sh`, without authoring Shep's extension or prompt here.
 - [ ] Extend main's `test/provision.test.ts` for shared-user units and fixed-profile installation. Edit preflight cases in `test/sandbox/*.cases.ts`.
 - [ ] Edit `.pi/skills/verify-factory/scripts/drive-replay.sh` only to carry the guest profile environment for owner-run execution inside the guest. VM1's restricted SSH target still refuses replay execution.
 - [ ] Edit `docs/operations/ms-a2-vm.md`, `docs/operations/platform.md`, `docs/operations/sandbox.md`, `docs/operations/owner-feed.md`, and `docs/operations/factory-cli.md`.
@@ -349,13 +349,13 @@ Agents use only `factory-verify@<guest-tailnet-name>` with the dedicated key `/h
 **Build.**
 
 - [ ] Retain main's `platform --env`, validated atomic `/etc/factory/factory.env`, `EnvironmentFile=`, linger setup, and runtime-directory preflight. Adapt the remaining `exedev` and `/run/user/1000` assumptions for the guest. Keep `nublai/pi-herdr-factorio` in the new unit. Do not re-port the merged provisioning patch.
-- [ ] Reuse the installer's exact-SHA checkout verification, hold-before-change ordering, failure stop and disable behavior, and fresh held-readiness checks in the guest installation runbook. Keep `server/install-exe-dev.sh` and its exe.dev preflight unchanged. It requires `exedev`, uid 1000, broad sudo, and exe.dev integrations, none of which authorize a guest runtime shortcut.
+- [ ] Reuse the installer's exact-SHA checkout verification, hold-before-change ordering, failure stop and disable behavior, and fresh held-readiness checks in the guest installation runbook. Keep `host/install/install-exe-dev.sh` and its exe.dev preflight unchanged. It requires `exedev`, uid 1000, broad sudo, and exe.dev integrations, none of which authorize a guest runtime shortcut.
 - [ ] Create the locked guest service account `factory` here, not in VM2 cloud-init. Use it for the controller, Shep bridge, and restricted pi orchestrator, with no sudo, Docker, or LXD groups. Keep VM4's minting unit as root, not another application account. Derive the runtime UID with `id -u factory`. Keep the controller checkout root-owned, runtime dependencies pinned, and state owned by `factory` with 0700 directories and 0600 private files.
 - [ ] Separate owner-run privileged installation from runtime. Adapt provisioning so a human admin installs root-owned assets, unit files, credentials, and sysctls without granting permanent sudo to `factory`. Retain an idempotent exe.dev path. Run no real model call from provisioning.
 - [ ] Render and install `server/vm/ms-a2/factory.service` as the guest's system `factory.service`, with `User=factory`, profile environment, watchdog, `NoNewPrivileges`, and the trusted gh wrapper. Keep the exe.dev unit byte-identical. Enable linger for `factory` and start its user manager. Set `XDG_RUNTIME_DIR` from the actual UID and prove `systemd-run --user --scope` works from the system unit without a login shell.
 - [ ] Keep bwrap `--unshare-all`, seccomp, private netns, and gateway socket transport. Enable initial unprivileged userns inside the guest only if its preflight requires it. Do not copy the host sysctl setting as proof or disable AppArmor globally on ms-a2. A guest-specific AppArmor or userns change needs the guest-change grant and its denial probes. Keep further nested user and mount namespaces inside the stage denied by seccomp.
 - [ ] Keep `MemoryMax=2G`, `TasksMax=512`, and `CPUQuota=100%` per stage and `max_concurrent: 2`. Do not place an aggregate service limit that ignores scopes in the user manager or starves them. Prove cleanup covers those separate cgroups.
-- [ ] Have the bridge run `node server/cli.ts owner-feed --json --state-dir "$STATE" --repo nublai/pi-herdr-factorio` directly as `factory`. Keep the state private. Add no sudoers rule, feed exporter, export timer, or intermediate feed file. Preserve the complete feed, its gaps, and its timestamp. An unavailable read can exit 0 with `gaps=[state_unavailable]`. Treat it as unavailable, never as an empty queue or a fresh notification seed.
+- [ ] Have the bridge run `node host/cli/index.ts owner-feed --json --state-dir "$STATE" --repo nublai/pi-herdr-factorio` directly as `factory`. Keep the state private. Add no sudoers rule, feed exporter, export timer, or intermediate feed file. Preserve the complete feed, its gaps, and its timestamp. An unavailable read can exit 0 with `gaps=[state_unavailable]`. Treat it as unavailable, never as an empty queue or a fresh notification seed.
 - [ ] Follow `owner-feed.md`'s proposed read rate, at most once every five seconds while the app is open and once every 60 seconds in the background. Keep one read in flight. Agree stale-read handling with Shep before implementation rather than treating a cached feed as fresh.
 - [ ] Run the pinned Shep bridge as `User=factory` in `shep-factory-bridge.service`. Deliver its APNs signing material only to that unit through `LoadCredential=`. Do not claim that delivery isolates it from a compromised same-user process. Bind its private backend to loopback and expose only the approved authenticated bridge endpoint through guest Tailscale. Do not expose the viewer or its hold form to the phone.
 - [ ] Launch the orchestrator as `factory` from the pinned root-owned wrapper with `PI_CODING_AGENT_DIR=/etc/factory/pi-orchestrator`. Keep that directory, its settings, and its model configuration root-owned and not writable by `factory`. Use a root-owned working directory with project discovery refused. Store sessions separately under `/var/lib/factory-orchestrator/sessions`, private to `factory`.
@@ -373,7 +373,7 @@ Agents use only `factory-verify@<guest-tailnet-name>` with the dedicated key `/h
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Test parity with main's generated environment, UID-derived runtime paths, missing user manager, shared-user units, fixed-profile installation, unavailable feed reads, and mode preservation. Retain `test/install-exe-dev.test.ts` as installer regression coverage. Run `npm run check`, the trusted reporter, `bash -n server/provision.sh`, and `systemd-analyze verify` against installed test units.
+- [ ] Test parity with main's generated environment, UID-derived runtime paths, missing user manager, shared-user units, fixed-profile installation, unavailable feed reads, and mode preservation. Retain `test/install-exe-dev.test.ts` as installer regression coverage. Run `npm run check`, the trusted reporter, `bash -n host/install/provision.sh`, and `systemd-analyze verify` against installed test units.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `task:qa` at the PR head, per the boot recipe.
 
@@ -410,7 +410,7 @@ Agents use only `factory-verify@<guest-tailnet-name>` with the dedicated key `/h
 
 **Files.**
 
-- [ ] Reuse MV4a's `server/cli.ts`, `src/controller/orchestrator.ts`, `test/dashboard.test.ts`, `test/helpers.ts`, `test/markers.test.ts`, `test/orchestrator.test.ts`, and `test/platform.test.ts` from `origin/mv4-drain-foreign-markers`.
+- [ ] Reuse MV4a's `host/cli/index.ts`, `src/controller/orchestrator.ts`, `test/dashboard.test.ts`, `test/helpers.ts`, `test/markers.test.ts`, `test/orchestrator.test.ts`, and `test/platform.test.ts` from `origin/mv4-drain-foreign-markers`.
 - [ ] Reuse `docs/operations/drain.md`, `docs/operations/factory-cli.md`, and `docs/operations/metrics.md` from that branch. Set the source to `nubl-factory`, the destination to the approved LXD guest, and active commands to `nublai/pi-herdr-factorio`. Preserve main's repository-history changes when porting. Append evidence rows to `docs/decisions.tsv` through `log.sh`.
 
 **Build.**
@@ -473,7 +473,7 @@ Agents use only `factory-verify@<guest-tailnet-name>` with the dedicated key `/h
 
 - [ ] Prepare and review VM7 and stacked VM8 before stopping production. Complete test-repository CI, fixture transfer, restore, off-host recovery, and rollback rehearsal first. Obtain D5 and D6 with the owner available to land the CI switch or its rollback promptly.
 - [ ] Owner-run under D6. Execute the landed VM6 drain runbook on `nubl-factory`. Deploy its diagnostic held, prove fresh zero predicates and the ready-issue inventory, and verify retained history. Stop the source and its scopes, disable its restart and boot path, and take the complete state and replay backup. Start the 60-minute proposed cutover timer at source stop. Append the drain row through `log.sh`. Keep the source stopped and held. A failed predicate blocks the CI switch.
-- [ ] Do not rerun `server/install-exe-dev.sh` on `nubl-factory` after the drain. Its success path calls `systemctl restart` and `systemctl enable factory.service`, which would restore the old writer. Use only the explicit owner-run rollback below.
+- [ ] Do not rerun `host/install/install-exe-dev.sh` on `nubl-factory` after the drain. Its success path calls `systemctl restart` and `systemctl enable factory.service`, which would restore the old writer. Use only the explicit owner-run rollback below.
 - [ ] Under the renewed workflow-edit grant, switch the two expected actors to `nubl-agent[bot]`. Port the reporter test coupling from MV4b, using the new profile rather than an exmach selection. Do not change required checks, exact-head bindings, artifact validation, or the secret-free candidate job.
 - [ ] Keep `nubl-factory` stopped and held through the change from `exe-dev-github-integration[bot]` to `nubl-agent[bot]`. Explain that CI changes only when the owner merges workflow files on GitHub, not when a VM checks out a branch. Never enable both old and new actors as a migration shortcut.
 - [ ] Prove reporter behavior locally and on the approved test repository before merge. Ask the owner to land this as the explicit main-owned CI bootstrap only if production-main dispatch cannot be proved before landing. Keep that native lane pending and production held until it passes after merge.
@@ -711,7 +711,7 @@ For orchestration v1, use Shep's fixed-profile pi session with only factory exte
 - Read `nublai/root`'s `.pi/plan/research/orchestration.md` for the coordinator's orchestration v1 decision. Track [#738](https://github.com/nublai/pi-herdr-factorio/issues/738) for bot refusal and creation-time labels, [#739](https://github.com/nublai/pi-herdr-factorio/issues/739) for intake references and multi-repo feed reads, and [#740](https://github.com/nublai/pi-herdr-factorio/issues/740) for the v1.1 questions link.
 - Read `docs/plans/factory-v1.md`, `docs/decisions.tsv`, and `docs/plans/exmach-move.md` for program limits, authority history, and the reusable MV work. This plan does not resume the parked exmach program.
 - Read `docs/operations/install-exe-dev.md`, `docs/operations/platform.md`, `docs/operations/sandbox.md`, `docs/operations/owner-feed.md`, `docs/operations/backup.md`, and `.pi/skills/verify-factory/SKILL.md` before changing their contracts. Check active repository and history behavior against `src/trust/platform.ts`, and reviewer selection against `.github/factory/WORKFLOW.md`.
-- Read `git show origin/mv4-drain-foreign-markers:docs/operations/drain.md` for VM6. Read main's `server/install-exe-dev.sh`, `server/provision.sh`, `server/factory.service`, `test/install-exe-dev.test.ts`, and `test/provision.test.ts` for VM5. Read `origin/mv4b-ci-bot`'s workflow and reporter-test patch for VM7.
+- Read `git show origin/mv4-drain-foreign-markers:docs/operations/drain.md` for VM6. Read main's `host/install/install-exe-dev.sh`, `host/install/provision.sh`, `host/install/factory.service`, `test/install-exe-dev.test.ts`, and `test/provision.test.ts` for VM5. Read `origin/mv4b-ci-bot`'s workflow and reporter-test patch for VM7.
 - VM2, VM3, VM4, and VM5 get the how skill, `<pstack>/skills/how/SKILL.md`. Use `<pstack>/skills/interrogate/SKILL.md` only for the owner choices D1 through D7, not routine implementation details.
 - Keep the decision trail under `<pstack>/skills/show-me-your-work/SKILL.md`. Use its `log.sh` for append-only rows during execution. The planning leaf does not append coordinator decisions.
 - Read `<pstack>/skills/technical-writing/SKILL.md`, `<pstack>/skills/unslop/SKILL.md`, `<pstack>/skills/no-comments/SKILL.md`, and `<pstack>/skills/typescript-best-practices/SKILL.md` before their respective writing, review, or source work.

@@ -1,0 +1,28 @@
+[Unit]
+Description=pi-herdr-factorio controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=all
+WatchdogSec=120
+User=exedev
+Group=exedev
+WorkingDirectory=/home/exedev/pi-herdr-factorio
+EnvironmentFile=/etc/factory/factory.env
+# Stage sandboxes are `systemd-run --user --scope` units under exedev's user manager.
+# Put no secret in Environment=. Future egress secrets come only through LoadCredential=.
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=PATH=/home/exedev/.local/bin:/home/exedev/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/exedev/.local/share/mise/shims/node host/cli/index.ts serve --repo nublai/pi-herdr-factorio --state-dir /home/exedev/factory-state
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=300
+Restart=on-failure
+RestartSec=30
+RestartPreventExitStatus=2
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -38,7 +38,7 @@ Architecture and security audit changed files first, then one rotating path grou
 
 Instruction audits select `AGENTS.md`, `.github/factory/WORKFLOW.md` and `skills/*/SKILL.md` from their first run, independently of the code path groups.
 
-Each complete, numbered window is capped at 8 KiB. The serialized source excerpt is capped at 32 KiB, including paths, line labels, visible ranges and skipped ranges. Reflect reduces that source cap to 8 KiB to leave room for its ledger and score inputs. Leading comments and import blocks are skipped without renumbering the remaining lines. Lines too large to fit a window are skipped whole, never cut in the middle of a label or source line. Lockfiles, generated filenames, `server/viewer/design/tokens.*`, `LICENSE`, fixtures, research and prototype archives are excluded. Binary files, unsafe paths, held-out acceptance and files over the citation validator's 1 MiB bound are omitted.
+Each complete, numbered window is capped at 8 KiB. The serialized source excerpt is capped at 32 KiB, including paths, line labels, visible ranges and skipped ranges. Reflect reduces that source cap to 8 KiB to leave room for its ledger and score inputs. Leading comments and import blocks are skipped without renumbering the remaining lines. Lines too large to fit a window are skipped whole, never cut in the middle of a label or source line. Lockfiles, generated filenames, `host/viewer/design/tokens.*`, `LICENSE`, fixtures, research and prototype archives are excluded. Binary files, unsafe paths, held-out acceptance and files over the citation validator's 1 MiB bound are omitted.
 
 Before assembly, the controller reads this job's last audited base SHA from its watermark state. That SHA survives receipt pruning and zero-token failures. Older state falls back to the last retained, charged execution. It runs `git diff --name-only --no-renames -z <previous-base> <current-base> --` in the controller's own pinned source checkout. This compares immutable local Git objects, never the working-tree diff, audit export or a GitHub compare endpoint. Missing local history records `changes_unavailable` before launch rather than inventing an empty change set. A first run without a previous audit uses rotation alone.
 
@@ -102,7 +102,7 @@ Maintenance accounting stays under `cadence/`. `status --json` includes a separa
 ## One-shot command
 
 ```bash
-node server/cli.ts cadence --once --job architecture --json \
+node host/cli/index.ts cadence --once --job architecture --json \
   --repo nublai/pi-herdr-factorio --state-dir "$STATE"
 ```
 
@@ -147,7 +147,7 @@ The 32 KiB excerpt yields these worst-part estimates. Totals include the 8,800-t
 | Hygiene | 22,137 | 34,937 | 1,063 |
 | Reflect (8 KiB source plus scores) | 15,832 | 29,832 | 6,168 |
 
-Without intervening changes, `src/` needs 41 group visits, or 205 weekly executions, to show 33,195 of its 33,971 lines, **97.72%**. `server/` needs 35 visits, or 175 weekly executions, to show 28,654 of 29,688 lines, **96.52%**. The unshown lines are leading headers and imports. These counts exclude the low-value files above. Every remaining line that fits a window is covered. The full five-group cycle takes at most 565 executions; instructions take two.
+Without intervening changes, `src/` needs 41 group visits, or 205 weekly executions, to show 33,195 of its 33,971 lines, **97.72%**. The then `server/` tree needs 35 visits, or 175 weekly executions, to show 28,654 of 29,688 lines, **96.52%**. The unshown lines are leading headers and imports. These counts exclude the low-value files above. Every remaining line that fits a window is covered. The full five-group cycle takes at most 565 executions; instructions take two.
 
 Those frozen cycles are long. Changed-first selection is what gives fresh code priority each week; the rotation fills the rest of the budget and eventually covers unchanged tails. No complete-repository weekly coverage is claimed.
 

@@ -16,35 +16,35 @@ import { createServer as createHttpServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { piCommand, sandboxHost } from "../../server/sandbox/launch.ts";
-import { sandboxExecutor } from "../../server/sandbox/executor.ts";
+import { piCommand, sandboxHost } from "../../host/sandbox/launch.ts";
+import { sandboxExecutor } from "../../host/sandbox/executor.ts";
 import {
 	FORCED_PI_FLAGS,
 	PI_AGENT_DIR,
 	piChildEnv,
 	wrapPiArgv,
-} from "../../server/sandbox/assets/pi.ts";
+} from "../../host/bundle/assets/pi.ts";
 import {
 	herdrEnvOf,
 	parseStageInitArgs,
 	startForwarder,
-} from "../../server/sandbox/assets/stage-init.ts";
+} from "../../host/bundle/assets/stage-init.ts";
 import {
 	BUNDLE,
 	bwrapArgv,
 	SANDBOX,
 	type SandboxLayout,
-} from "../../server/sandbox/bwrap.ts";
-import { startGatewayProcess } from "../../server/sandbox/gateway-client.ts";
+} from "../../host/isolation/bwrap.ts";
+import { startGatewayProcess } from "../../host/gateway/client.ts";
 import {
 	bundleMatchesSource,
 	manifestDigest,
-} from "../../server/sandbox/manifest.ts";
+} from "../../host/bundle/manifest.ts";
 import {
 	type PreflightDeps,
 	runPreflight,
-} from "../../server/sandbox/preflight.ts";
-import type { StageReceipt } from "../../server/sandbox/result.ts";
+} from "../../host/isolation/preflight.ts";
+import type { StageReceipt } from "../../host/sandbox/result.ts";
 import {
 	DEFAULT_SCOPE_LIMITS,
 	namesStateDir,
@@ -54,7 +54,7 @@ import {
 	scopeOwner,
 	scopeUnit,
 	stopScopeArgv,
-} from "../../server/sandbox/scope.ts";
+} from "../../host/isolation/scope.ts";
 import {
 	AUDIT_ARCH,
 	decodeProgram,
@@ -63,7 +63,7 @@ import {
 	type SeccompArch,
 	seccompProgram,
 	SYSCALLS,
-} from "../../server/sandbox/seccomp.ts";
+} from "../../host/isolation/seccomp.ts";
 import type { ModelId } from "../../src/config/schema.ts";
 import {
 	arrayOf,
@@ -903,7 +903,7 @@ describe("pi wrapper", () => {
 				address !== null && address instanceof Object ? address.port : 0;
 
 			const script = readFileSync(
-				new URL("../../server/provision.sh", import.meta.url),
+				new URL("../../host/install/provision.sh", import.meta.url),
 				"utf8",
 			).split("\n");
 
@@ -1489,10 +1489,10 @@ describe("stale bundle", () => {
 	} satisfies Record<string, string>;
 
 	const SOURCE_PATH = new Map([
-		["sandbox/pi.ts", "server/sandbox/assets/pi.ts"],
-		["sandbox/stage-init.ts", "server/sandbox/assets/stage-init.ts"],
-		["pkg/package.json", "server/sandbox/assets/package.json"],
-		["pkg/package-lock.json", "server/sandbox/assets/package-lock.json"],
+		["sandbox/pi.ts", "host/bundle/assets/pi.ts"],
+		["sandbox/stage-init.ts", "host/bundle/assets/stage-init.ts"],
+		["pkg/package.json", "host/bundle/assets/package.json"],
+		["pkg/package-lock.json", "host/bundle/assets/package-lock.json"],
 	]);
 
 	function put(base: string, path: string, text: string) {
@@ -1532,8 +1532,8 @@ describe("stale bundle", () => {
 	it("refuses a bundle whose skill, asset, package, extra skill or missing file differs", async () => {
 		const edits: ((c: string, b: string) => void)[] = [
 			(c) => put(c, "skills/acceptance/SKILL.md", "accept v2\n"),
-			(c) => put(c, "server/sandbox/assets/pi.ts", "pi2\n"),
-			(c) => put(c, "server/sandbox/assets/package-lock.json", '{"a":1}\n'),
+			(c) => put(c, "host/bundle/assets/pi.ts", "pi2\n"),
+			(c) => put(c, "host/bundle/assets/package-lock.json", '{"a":1}\n'),
 			(c) => put(c, "skills/new/SKILL.md", "new\n"),
 			(_c, b) => put(b, "skills/gone/SKILL.md", "gone\n"),
 			(_c, b) => rmSync(join(b, "sandbox/stage-init.ts")),

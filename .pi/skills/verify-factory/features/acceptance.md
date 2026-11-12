@@ -19,7 +19,7 @@ Label an authorized fixture `factory:ready` as a writer. The controller specifie
 
 ## Driving it with the named tooling
 
-Preconditions are those of `specify.md`. `readlink /var/lib/factory-sandbox/current` must name a bundle whose `skills/` lists `acceptance`. Installing a changed bundle with `bash server/provision.sh sandbox` needs a separate VM-change grant. Never provision the retiring host during the layout program.
+Preconditions are those of `specify.md`. `readlink /var/lib/factory-sandbox/current` must name a bundle whose `skills/` lists `acceptance`. Installing a changed bundle with `bash host/install/provision.sh sandbox` needs a separate VM-change grant. Never provision the retiring host during the layout program.
 
 1. Run the doctor, snapshot the VM, set up the lane and record its head and bundle digest.
 2. Create a `[<pr-id>] ...` fixture issue as the owner, then add `factory:ready` as the owner. Do not touch `factory:enabled`.

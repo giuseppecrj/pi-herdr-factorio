@@ -13,7 +13,7 @@ import { request } from "node:http";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
-import { Evidence, markerHistoryGap } from "../server/viewer/evidence.ts";
+import { Evidence, markerHistoryGap } from "../host/viewer/evidence.ts";
 import {
 	arrayOf,
 	fieldOf,
@@ -21,13 +21,13 @@ import {
 	parseJson,
 	textOf,
 } from "../src/core/json.ts";
-import { escapeHtml, renderRun, expectedGap } from "../server/viewer/render.ts";
-import { icons } from "../server/viewer/design/icons/icons.ts";
-import { runCli } from "../server/cli.ts";
-import { runSpecify } from "../server/sandbox/specify.ts";
-import { readStageReceipt } from "../server/sandbox/receipts.ts";
-import { fileRunFiles } from "../server/controller/run-files.ts";
-import { readStoredVerdict } from "../server/controller/state.ts";
+import { escapeHtml, renderRun, expectedGap } from "../host/viewer/render.ts";
+import { icons } from "../host/viewer/design/icons/icons.ts";
+import { runCli } from "../host/cli/index.ts";
+import { runSpecify } from "../host/sandbox/specify.ts";
+import { readStageReceipt } from "../host/sandbox/receipts.ts";
+import { fileRunFiles } from "../host/controller/run-files.ts";
+import { readStoredVerdict } from "../host/controller/state.ts";
 import {
 	candidateLifecycleFixture,
 	storedAssessment,
@@ -42,11 +42,12 @@ import {
 } from "../src/candidate/handoff.ts";
 import { keepReview } from "../src/candidate/review.ts";
 import { validationDir } from "../src/candidate/validation.ts";
-import { viewerClaim } from "../server/viewer/claim.ts";
+import { viewerClaim } from "../host/viewer/claim.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { readViewerRun, startViewer } from "../server/viewer.ts";
+import { startViewer } from "../host/viewer/server.ts";
+import { readViewerRun } from "../host/viewer/evidence.ts";
 import { runIdOf, digestOf } from "../src/core/run.ts";
 import {
 	formatMarker,
@@ -1541,7 +1542,7 @@ test("claims are guarded regular bounded reads and sibling FIFOs cannot hang a v
 	try {
 		const sibling = join(root, "claims", `${"d".repeat(64)}.json`);
 		execFileSync("mkfifo", [sibling]);
-		const script = `import { readViewerRun } from ${JSON.stringify(new URL("../server/viewer.ts", import.meta.url).href)}; await readViewerRun(${JSON.stringify(root)}, ${JSON.stringify(runId)});`;
+		const script = `import { readViewerRun } from ${JSON.stringify(new URL("../host/viewer/evidence.ts", import.meta.url).href)}; await readViewerRun(${JSON.stringify(root)}, ${JSON.stringify(runId)});`;
 		execFileSync(process.execPath, ["--input-type=module", "-e", script], {
 			timeout: 5000,
 		});

@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createServer } from "node:http";
 import { it, type TestContext } from "node:test";
-import { measurementInput } from "../server/cli/measurement.ts";
+import { measurementInput } from "../host/cli/measurement.ts";
 import {
 	explainPrompt,
 	explainFindings,
@@ -51,23 +51,24 @@ import {
 	type Contract,
 } from "../src/contract/contract.ts";
 import { digestOf } from "../src/core/run.ts";
-import { runCli, execFile, type ControllerRuntime } from "../server/cli.ts";
-import { procTable } from "../server/controller/lock.ts";
+import { runCli } from "../host/cli/index.ts";
+import { execFile, type ControllerRuntime } from "../host/cli/platform.ts";
+import { procTable } from "../host/controller/lock.ts";
 import {
 	controllerMeasurements,
 	controllerMeasure,
 	pumpScoreOutbox,
 	measurementCharges,
-} from "../server/controller/measurement.ts";
-import { fileRunFiles } from "../server/controller/run-files.ts";
+} from "../host/controller/measurement.ts";
+import { fileRunFiles } from "../host/controller/run-files.ts";
 import {
 	durableUsageOf,
 	readDurableAccounting,
-} from "../server/controller/terminal.ts";
-import { sandboxHost } from "../server/sandbox/launch.ts";
-import { sandboxExecutor } from "../server/sandbox/executor.ts";
-import { manifestDigest } from "../server/sandbox/manifest.ts";
-import { startGatewayProcess } from "../server/sandbox/gateway-client.ts";
+} from "../host/controller/terminal.ts";
+import { sandboxHost } from "../host/sandbox/launch.ts";
+import { sandboxExecutor } from "../host/sandbox/executor.ts";
+import { manifestDigest } from "../host/bundle/manifest.ts";
+import { startGatewayProcess } from "../host/gateway/client.ts";
 import { objectOf, parseJson, arrayOf } from "../src/core/json.ts";
 import { parseWorkflow } from "../src/config/parse.ts";
 import { GitHubPublicationApi } from "../src/github/publish.ts";
@@ -466,7 +467,7 @@ async function nativeBundle(t: TestContext, root: string) {
 
 	for (const name of ["pi.ts", "stage-init.ts"])
 		copyFileSync(
-			join(source, "server/sandbox/assets", name),
+			join(source, "host/bundle/assets", name),
 			join(bundle, "sandbox", name),
 		);
 	cpSync(join(source, "skills"), join(bundle, "skills"), { recursive: true });

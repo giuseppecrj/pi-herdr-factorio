@@ -27,7 +27,13 @@ export const REPLAY_RUN_CAP = 540_000;
 export const REPLAY_CORPUS = "test/fixtures/replay";
 const DIGEST = /^[a-f0-9]{64}$/;
 
-const BUNDLE_PATHS = ["skills", "server/sandbox/assets", "server/provision.sh"];
+const BUNDLE_PATHS = [
+	"skills",
+	"host/bundle/assets",
+	"host/install/provision.sh",
+	"server/sandbox/assets",
+	"server/provision.sh",
+];
 
 export type ReplayCase = {
 	readonly id: string;
@@ -156,13 +162,13 @@ export async function loadReplayCorpus(dir: string): Promise<ReplayCorpus> {
 	return { v: 1, digest, cases: result };
 }
 
-// Historical layout aliases: a frozen replay corpus can name a source path that a later
-// layout PR moved. Used only when the original path is missing at a revision, and only for
-// guarded symbol lookups. One target per old path; a guard whose symbols moved to two
-// different files cannot be resolved and fails closed.
+// Frozen replay paths use aliases as a fallback for missing guarded sources and as
+// additional pathspecs for unguarded diffs. A guard split across files fails closed.
 const REPLAY_SOURCE_ALIASES: ReadonlyMap<string, string> = new Map([
 	["src/workflow.ts", "src/config/schema.ts"],
 	["src/specify.ts", "src/contract/contract.ts"],
+	["server/viewer.ts", "host/viewer/server.ts"],
+	["server/cli.ts", "host/cli/index.ts"],
 ]);
 
 // Symbol guards compare whole top-level declarations, not just changed lines.
@@ -253,7 +259,15 @@ export async function checkReplay(input: {
 			const change = !c.liveReplayable
 				? null
 				: c.guardPattern === null
-					? await diff(c.baseSha, input.mainSha, c.paths)
+					? await diff(
+							c.baseSha,
+							input.mainSha,
+							c.paths.flatMap((path) => {
+								const alias = REPLAY_SOURCE_ALIASES.get(path);
+
+								return alias === undefined ? [path] : [path, alias];
+							}),
+						)
 					: await symbolDiff(c);
 
 			const status =

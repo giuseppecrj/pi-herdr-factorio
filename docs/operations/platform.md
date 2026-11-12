@@ -81,7 +81,7 @@ Refusal reasons: `unknown_platform`, `domain_invalid`, `platform_selection_misma
 
 ## Provisioning environment
 
-`node server/cli.ts platform --env` prints nonsecret assignments from the same resolved profile, without a workflow, lock, GitHub call or model request. Full `server/provision.sh` uses them for the host Pi configuration and installs the exact output as `/etc/factory/factory.env`, root-owned and mode 0644. `server/factory.service` requires that environment file rather than hard-coding `GH_HOST`.
+`node host/cli/index.ts platform --env` prints nonsecret assignments from the same resolved profile, without a workflow, lock, GitHub call or model request. Full `host/install/provision.sh` uses them for the host Pi configuration and installs the exact output as `/etc/factory/factory.env`, root-owned and mode 0644. `host/install/factory.service` requires that environment file rather than hard-coding `GH_HOST`.
 
 The assignments are `FACTORY_PLATFORM`, `GH_HOST`, `LLM_API_KEY_PLACEHOLDER`, `LLM_BASE_URL`, `LLM_OPENAI_BASE_URL` and `LLM_ANTHROPIC_BASE_URL`. Only exmach adds `GH_ENTERPRISE_TOKEN=exmach`; exe-dev sets no GitHub token, preserving its existing `gh` behaviour. The edge injects the real credential. Host Pi uses the separate `LLM_API_KEY_PLACEHOLDER`, `exe-dev-integration` on exe-dev and `exmach` on exmach. Provider URLs use the profile's model base paths, without a trailing slash, so the default Pi configuration remains byte-identical. The sandbox still uses its own loopback URLs.
 
@@ -92,8 +92,8 @@ After changing either selection source, rerun full provisioning before restartin
 Run the full inventory with `rg -n 'exe\.xyz|exe-dev-github-integration|169\.254\.169\.254|giuseppecrj/pi-herdr-factorio' server src extension`.
 
 - `src/trust/platform.ts` holds the built-in exe-dev network, identity and repository defaults. Its `exe-dev-integration` placeholder is deliberately retained for host Pi, not used as a GitHub token.
-- `server/sandbox/echo-fixture.ts` holds a redirect target for a test, not a platform value.
-- `server/factory.service:18` deliberately keeps the repository in `ExecStart`. The unit also retains its `/home/exedev` paths and `User=exedev` (`Group=exedev` too); those deployment values are not profile-selected. It no longer hard-codes an exe-dev host.
+- `host/gateway/echo-fixture.ts` holds a redirect target for a test, not a platform value.
+- `host/install/factory.service:18` deliberately keeps the repository in `ExecStart`. The unit also retains its `/home/exedev` paths and `User=exedev` (`Group=exedev` too); those deployment values are not profile-selected. It no longer hard-codes an exe-dev host.
 
 ## Not covered here
 

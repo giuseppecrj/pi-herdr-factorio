@@ -12,7 +12,7 @@ import {
 	isForbiddenUpstreamHost,
 	parseRouteTable,
 	type RouteTable,
-} from "../../server/sandbox/routes.ts";
+} from "../../host/gateway/routes.ts";
 import type { JsonValue } from "../../src/core/json.ts";
 import { EXE_DEV_PLATFORM } from "../../src/trust/platform.ts";
 

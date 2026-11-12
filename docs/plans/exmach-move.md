@@ -86,7 +86,7 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 - [ ] Pick the target VM. Before `MV2` lands, use `.pi/skills/verify-factory/scripts/vm.sh` against `pi-factorio`. After `MV2`, set the target variable `MV2` adds to `pi-factorio` or the exmach `factorio` VM, and record which.
 - [ ] Ship the head with `lane-setup.sh` to a per-lane workspace and state directory under `/home/exedev/factory-verification/<pr-id>-w<n>/`. Never share one between lanes. Never start a second controller over production issues.
 - [ ] Keep `pi-factorio` production held (`locally_disabled`) for every lane. Lift a hold only on the one controller meant to run, and only under the cutover grant.
-- [ ] Deliver input only through `gh issue`, `gh pr`, `vm.sh` and `node --experimental-strip-types server/cli.ts`. Title each fixture issue `[<PR>-w<n>-...]`. Close it after the lane and confirm it is closed. Leave `factory:enabled` alone.
+- [ ] Deliver input only through `gh issue`, `gh pr`, `vm.sh` and `node --experimental-strip-types host/cli/index.ts`. Title each fixture issue `[<PR>-w<n>-...]`. Close it after the lane and confirm it is closed. Leave `factory:enabled` alone.
 - [ ] Read state with `status --json`, `owner-feed --json`, `gh issue view`, `gh api` timeline reads and scoped `journalctl` reads.
 - [ ] Size any lane token cap to stage allowances. One full specify, accept and build run reserves about 540,000 tokens.
 - [ ] Save every artifact to `/tmp/swarm-<pr-id>/worker-<n>/<slug>` and return the paths with the report.
@@ -99,7 +99,7 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 
 - [ ] Create `src/trust/platform.ts` with the `PlatformProfile` type, the `exe-dev` default, the `exmach` profile taking a domain, and `parsePlatformProfile`.
 - [ ] Create `test/platform.test.ts`.
-- [ ] Edit `src/trust/markers.ts`, `src/github/publish.ts`, `src/github/adapter.ts`, `src/trust/admission.ts`, `src/config/{schema,parse,load,views}.ts`, `src/controller/orchestrator.ts`, `src/candidate/validation.ts`, `src/candidate/feedback.ts`, `src/maintenance/replay.ts`, `server/cli.ts`, `server/controller.ts`, `server/sandbox.ts`, `server/sandbox/routes.ts`, `server/sandbox/gateway-main.ts`, `server/sandbox/gateway-client.ts`, `server/sandbox/credentials.ts`, `server/sandbox/control.ts` and `extension/index.ts`, only to carry the profile. The walkthrough found that the first file list missed the gateway, recovery and extension paths.
+- [ ] Edit `src/trust/markers.ts`, `src/github/publish.ts`, `src/github/adapter.ts`, `src/trust/admission.ts`, `src/config/{schema,parse,load,views}.ts`, `src/controller/orchestrator.ts`, `src/candidate/validation.ts`, `src/candidate/feedback.ts`, `src/maintenance/replay.ts`, `host/cli/index.ts`, `server/controller.ts`, `server/sandbox.ts`, `host/gateway/routes.ts`, `host/gateway/main.ts`, `host/gateway/client.ts`, `host/gateway/credentials.ts`, `host/gateway/control.ts` and `extension/index.ts`, only to carry the profile. The walkthrough found that the first file list missed the gateway, recovery and extension paths.
 - [ ] Edit the existing tests these changes require, without weakening an assertion. Under the default profile, existing expectations keep passing.
 - [ ] Create `docs/operations/platform.md`. Edit `docs/operations/sandbox.md` and `docs/operations/factory-cli.md` only where they name the model host, edge address, forbidden domains, the status field or the startup failure.
 
@@ -112,14 +112,14 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 - [ ] Ship the `exmach` profile with `llm.int.<domain>`, edge `10.74.1.1`, GitHub host `factorio.int.<domain>` (the `factorio` integration that alone will carry `actions`, provisional until E1 and E2 land), and `anthropicStages` still set to accept and code-review only. `MV7` lifts it. Its base paths are OpenAI `/v1/` and Anthropic `/`, because Pi's Anthropic SDK appends `/v1/messages`. Its xAI path is `null`, and an xAI fallback is refused in workflow validation and in route construction.
 - [ ] Give the gateway a separate `--platform` descriptor. It rebuilds its expected upstreams from the built-in profile, so `productionDefect` still refuses a route table that differs. The table never authorizes itself.
 - [ ] Add a `platform` object with a stable digest to `status --json`, and record the controller's startup profile in its status snapshot.
-- [ ] Replace every hard-coded site. These are `server/sandbox/routes.ts:170`, `:176`, `:250-258` and `:518`, `src/trust/markers.ts:14-15`, `src/github/publish.ts:44-45`, `src/github/adapter.ts:1179`, `server/cli.ts:1053`, `server/controller/candidate-port.ts:1259`, `src/trust/admission.ts:52-54` and the `anthropicRule` text in `src/config/parse.ts`.
+- [ ] Replace every hard-coded site. These are `host/gateway/routes.ts:170`, `:176`, `:250-258` and `:518`, `src/trust/markers.ts:14-15`, `src/github/publish.ts:44-45`, `src/github/adapter.ts:1179`, `7a9744d:server/cli.ts:1053`, `host/controller/candidate-port.ts:1259`, `src/trust/admission.ts:52-54` and the `anthropicRule` text in `src/config/parse.ts`.
 - [ ] Select the profile from `FACTORY_PLATFORM` and an optional root-owned `/etc/factory/platform.json`. The file holds only the selector, controller login, app slug, bot email and an optional repository list. With neither source, select `exe-dev`. Both sources must agree. The `exmach` profile carries the identity exmach published in giuseppecrj/exmach#94, which is login `nubl-agent[bot]`, app slug `nubl-agent` and email `353429311+nubl-agent[bot]@users.noreply.github.com`. The file may override all three together, and may set `ghHost` to one label under `int.<domain>`. Any malformed source fails closed and never falls back to `exe-dev`. The walkthrough is in `../pi-herdr-factorio-trails/MV1/walkthrough/explain.md`.
 
 **You see.**
 
 - [ ] With no profile set, `status --json` reports `platform.name` as `exe-dev` and every route matches trunk.
 - [ ] With `FACTORY_PLATFORM=exmach:` and no domain, startup exits 2 with `event=platform_invalid` and a named reason. A built-in selector always generates its own forbidden domains, so `own_domain_not_forbidden` is proven by a unit test on a malformed resolved profile, not live.
-- [ ] `rg 'exe\.xyz|exe-dev-github-integration|169\.254\.169\.254|nublai/pi-herdr-factorio' src server extension` finds only `src/trust/platform.ts`, the echo fixture, the generic refused ranges in `server/sandbox/gateway.ts`, and the MV3 and MV7 files `server/provision.sh`, `server/factory.service` and `server/sandbox/anthropic-limits.ts`.
+- [ ] `rg 'exe\.xyz|exe-dev-github-integration|169\.254\.169\.254|nublai/pi-herdr-factorio' src host extension` finds only `src/trust/platform.ts`, the echo fixture, the generic refused ranges in `host/gateway/gateway.ts`, and the MV3 and MV7 files `host/install/provision.sh`, `host/install/factory.service` and `src/core/models.ts`.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -213,8 +213,8 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 
 **Files.**
 
-- [ ] Edit `server/provision.sh` and `server/factory.service`.
-- [ ] Edit `server/cli.ts` only for the `/run/user/1000` preflight check.
+- [ ] Edit `host/install/provision.sh` and `host/install/factory.service`.
+- [ ] Edit `host/cli/index.ts` only for the `/run/user/1000` preflight check.
 - [ ] Edit `docs/operations/sandbox.md` for linger, cgroup delegation and the egress requirement.
 - [ ] Edit the existing provisioning tests under `test/sandbox/`.
 
@@ -271,7 +271,7 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 **Files.**
 
 - [ ] Create `docs/operations/drain.md`.
-- [ ] Edit `server/cli.ts` and `server/controller.ts` for the `status` report of markers by a login other than the profile's.
+- [ ] Edit `host/cli/index.ts` and `server/controller.ts` for the `status` report of markers by a login other than the profile's.
 - [ ] Edit `test/markers.test.ts` and `docs/operations/factory-cli.md`.
 - [ ] Edit `.github/workflows/check.yml:46` and `.github/workflows/ci.yml:116` to `nubl-agent[bot]`. The owner authorized the coordinator to make these edits on 2026-11-10. They stack on `MV1`, because `test/validation.test.ts` runs `ci.yml`'s reporter with the controller's login, so its reporter cases must use the exmach profile once `ci.yml` names the new bot. On `main` alone the edit fails those tests.
 
@@ -439,7 +439,7 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 **Files.**
 
 - [ ] Edit `src/trust/platform.ts` to widen `anthropicStages` in the `exmach` profile.
-- [ ] Edit `server/sandbox/anthropic-limits.ts` against exmach's `GET /v1/models`.
+- [ ] Edit `src/core/models.ts` against exmach's `GET /v1/models`.
 - [ ] Edit `test/platform.test.ts`, the workflow tests and `docs/operations/platform.md`.
 - [ ] Edit `docs/decisions.tsv` with one row by `log.sh`.
 

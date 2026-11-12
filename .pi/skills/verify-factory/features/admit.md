@@ -1,6 +1,6 @@
 # admit
 
-`node server/cli.ts admit` decides whether one issue's latest `factory:ready` label event is admitted, and prints a receipt. It reads GitHub through the integration, writes at most one admission record under the lane's state directory, and never starts a model. The command reference is the `admit` section of `docs/operations/factory-cli.md`.
+`node host/cli/index.ts admit` decides whether one issue's latest `factory:ready` label event is admitted, and prints a receipt. It reads GitHub through the integration, writes at most one admission record under the lane's state directory, and never starts a model. The command reference is the `admit` section of `docs/operations/factory-cli.md`.
 
 ## Sub-features
 
@@ -13,7 +13,7 @@
 
 ## How to get to it (user POV)
 
-- `node server/cli.ts admit --json --repo nublai/pi-herdr-factorio --issue <n> --state-dir <dir>`
+- `node host/cli/index.ts admit --json --repo nublai/pi-herdr-factorio --issue <n> --state-dir <dir>`
 
 ## Driving it with ssh
 

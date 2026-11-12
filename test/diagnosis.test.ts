@@ -58,29 +58,29 @@ import {
 	type JsonObject,
 	type JsonValue,
 } from "../src/core/json.ts";
+import { checkCandidate } from "../host/gates/gates.ts";
 import {
-	checkCandidate,
 	exportTree,
 	heldoutDigest,
-	localRunner,
 	materializeFromDirectories,
 	replacementDigest,
-	replayHeldoutCandidate,
-	runHeldoutBase,
-} from "../server/gates.ts";
+	MATERIALIZER_FILES,
+} from "../host/gates/materialize.ts";
+import { localRunner } from "../host/gates/runner.ts";
+import { replayHeldoutCandidate, runHeldoutBase } from "../host/gates/base.ts";
 import { legacyMaterialize } from "./fixtures/oracle-corpus/patches/legacy-materializer.ts";
 import {
 	controllerBaseChecker,
 	controllerDiagnosis,
 	type DiagnosisFacts,
-} from "../server/controller/checkers.ts";
+} from "../host/controller/checkers.ts";
 import {
 	checkoutWorkspace,
 	ghTarball,
 	type TarballFetch,
-} from "../server/controller/checkout.ts";
-import { controllerValidator } from "../server/controller/validation-sweep.ts";
-import { fileRunFiles } from "../server/controller/run-files.ts";
+} from "../host/controller/checkout.ts";
+import { controllerValidator } from "../host/controller/validation-sweep.ts";
+import { fileRunFiles } from "../host/controller/run-files.ts";
 import {
 	dispatchNonce,
 	parseValidationState,
@@ -1819,9 +1819,9 @@ test("classifier: a non-heldout candidate check failure alone is candidate and n
 test("legacy materializer fixture stays out of production imports", () => {
 	for (const file of [
 		"src/candidate/diagnosis.ts",
-		"server/gates.ts",
-		"server/controller/checkers.ts",
-		"server/controller/validation-sweep.ts",
+		"host/gates/gates.ts",
+		"host/controller/checkers.ts",
+		"host/controller/validation-sweep.ts",
 	])
 		assert.doesNotMatch(
 			readFileSync(file, "utf8"),
@@ -1891,7 +1891,9 @@ async function jobWorld(
 	).map((s) => ({ ...s, criteria: s.criteria.map((c) => ids.get(c) ?? c) }));
 
 	const f = repository(t, {
-		"server/gates.ts": GATE_SOURCE,
+		...Object.fromEntries(
+			MATERIALIZER_FILES.map((path) => [path, GATE_SOURCE]),
+		),
 		...Object.fromEntries(
 			Object.entries(entry.base ?? {}).map(([path, file]) => [
 				path,
@@ -2227,7 +2229,11 @@ async function jobWorld(
 
 	const owner = (
 		materialize = entry.materializer === "legacy-pre-577",
-		source: Uint8Array | null = Buffer.from(GATE_SOURCE),
+		source: Uint8Array | null = Buffer.from(
+			JSON.stringify(
+				MATERIALIZER_FILES.map((path) => [path, digestOf(GATE_SOURCE)]),
+			),
+		),
 		diagnosisFetch: TarballFetch = fetch,
 	) =>
 		controllerDiagnosis({
@@ -2402,6 +2408,34 @@ scoped(
 		assert.deepEqual(w.writes, ["DELETE"]);
 	},
 );
+
+for (const member of MATERIALIZER_FILES)
+	scoped(
+		`L13 diagnosis refuses a changed executable materializer member ${member}`,
+		async (t) => {
+			const w = await jobWorld(t, "synthetic-wrong-value");
+
+			const source = Buffer.from(
+				JSON.stringify(
+					MATERIALIZER_FILES.map((path) => [
+						path,
+						digestOf(path === member ? "changed\n" : GATE_SOURCE),
+					]),
+				),
+			);
+
+			const read = finishedAssessment(await w.settle(w.owner(false, source)));
+			assert.deepEqual(read.assessment, {
+				kind: "failed",
+				failure: {
+					kind: "missing_evidence",
+					reason: "unsupported_materializer",
+				},
+			});
+			assert.equal(existsSync(join(w.dir, "feedback.json")), false);
+			assert.deepEqual(w.writes, ["DELETE"]);
+		},
+	);
 
 for (const source of ["differs", "default"] as const)
 	scoped(

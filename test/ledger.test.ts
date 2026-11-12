@@ -42,10 +42,10 @@ import { TRUSTED_RUN_CAP } from "./fake-ticket-adapter.ts";
 import {
 	fileLedgerOutbox,
 	pumpLedgerOutbox,
-} from "../server/controller/outbox.ts";
-import { fileRunAccounting } from "../server/controller/state.ts";
-import { readTerminalEvidence } from "../server/controller/terminal.ts";
-import { execFile } from "../server/cli.ts";
+} from "../host/controller/outbox.ts";
+import { fileRunAccounting } from "../host/controller/state.ts";
+import { readTerminalEvidence } from "../host/controller/terminal.ts";
+import { execFile } from "../host/cli/platform.ts";
 import {
 	mkdirSync,
 	mkdtempSync,

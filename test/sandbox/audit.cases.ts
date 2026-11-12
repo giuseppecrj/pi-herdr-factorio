@@ -18,14 +18,11 @@ import {
 	openAuditFile,
 	redactMethod,
 	redactPath,
-} from "../../server/sandbox/audit.ts";
+} from "../../host/gateway/audit.ts";
 import { journalCharge, requestSettlements } from "../../src/core/journal.ts";
-import {
-	SecretScanner,
-	secretForms,
-} from "../../server/sandbox/credentials.ts";
-import { AnthropicSseMeter, SseMeter } from "../../server/sandbox/meter.ts";
-import type { RouteId } from "../../server/sandbox/routes.ts";
+import { SecretScanner, secretForms } from "../../host/gateway/credentials.ts";
+import { AnthropicSseMeter, SseMeter } from "../../host/gateway/meter.ts";
+import type { RouteId } from "../../host/gateway/routes.ts";
 
 function record(overrides: Partial<AuditRecord> = {}): AuditRecord {
 	return {

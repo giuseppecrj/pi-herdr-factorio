@@ -1,4 +1,4 @@
-// Generates server/viewer/design/tokens.css from the vendored Shep tokens.json (see DESIGN.md).
+// Generates host/viewer/design/tokens.css from the vendored Shep tokens.json (see DESIGN.md).
 //
 //   node scripts/design-tokens.mjs                 write tokens.css
 //   node scripts/design-tokens.mjs --check         exit 1 if tokens.css is not what tokens.json generates
@@ -9,7 +9,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const designDir = join(root, "server/viewer/design");
+const designDir = join(root, "host/viewer/design");
 export const paths = {
   json: join(designDir, "tokens.json"),
   css: join(designDir, "tokens.css"),

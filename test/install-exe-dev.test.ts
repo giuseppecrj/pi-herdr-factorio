@@ -8,7 +8,7 @@ import { describe, it } from "node:test";
 
 const script =
 	process.env.INSTALLER_UNDER_TEST ??
-	fileURLToPath(new URL("../server/install-exe-dev.sh", import.meta.url));
+	fileURLToPath(new URL("../host/install/install-exe-dev.sh", import.meta.url));
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const sha = "a".repeat(40);
@@ -244,16 +244,16 @@ describe("exe.dev installer read-only preflight (stubbed external infrastructure
 const installHarness = String.raw`
 W=$2
 export W FAKE="$W/fake" LOG="$W/log"
-mkdir -p "$FAKE/etc" "$W/home" "$W/bin" "$W/src/server"
-cp "$1" "$W/src/server/install-exe-dev.sh"
-cp "$3/server/factory.service" "$W/src/server/"
-cat >"$W/src/server/provision.sh" <<'P'
+mkdir -p "$FAKE/etc" "$W/home" "$W/bin" "$W/src/host/install"
+cp "$1" "$W/src/host/install/install-exe-dev.sh"
+cp "$3/host/install/factory.service" "$W/src/host/install/"
+cat >"$W/src/host/install/provision.sh" <<'P'
 echo "provision hold=$([ -e "$HOME/factory-state/disabled" ] && echo y || echo n)" >>"$LOG"
 [ -z "${"${PROVISION_FAIL:-}"}" ] || { echo provision-fail >&2; exit 1; }
-mkdir -p "$(dirname "$0")/../node_modules"
+mkdir -p "$(dirname "$0")/../../node_modules"
 P
 # A marker exists only in the pinned installer, not in the bootstrap being sourced.
-sed -i '2i echo pinned-installer >>"$LOG"' "$W/src/server/install-exe-dev.sh"
+sed -i '2i echo pinned-installer >>"$LOG"' "$W/src/host/install/install-exe-dev.sh"
 echo node_modules/ >"$W/src/.gitignore"
 git init -q --bare "$W/origin.git"
 git init -q "$W/src"
@@ -362,6 +362,30 @@ function isolatedInstall(body: string) {
 }
 
 describe("exe.dev installer lifecycle (reviewer's stub harness, no real host writes)", () => {
+	for (const existingHold of [false, true]) {
+		it(`old bootstrap refuses a new-layout SHA before stopping the service, hold present=${existingHold}`, () => {
+			const result = isolatedInstall(`
+run "$bootstrap" "$A"
+${existingHold ? 'printf retained >"$state/disabled"' : 'rm "$state/disabled"'}
+: >"$LOG"
+if run "$3/test/fixtures/layout-host/old-bootstrap.sh" "$B"; then exit 91; fi
+[ -e "$state/disabled" ]
+${existingHold ? '[ "$(cat "$state/disabled")" = retained ]' : ""}
+[ -f "$FAKE/active" ]
+[ -f "$FAKE/enabled" ]
+[ "$(git -C "$checkout" rev-parse HEAD)" = "$A" ]
+[ "$(cat "$state/install-exe-dev.commit")" = "$A nublai/pi-herdr-factorio" ]
+absent_log 'systemctl stop|systemctl disable|systemctl restart|^provision '
+`);
+
+			assert.equal(result.status, 0, result.stdout + result.stderr);
+			assert.match(
+				result.stderr,
+				/server\/install-exe-dev\.sh: No such file or directory/,
+			);
+		});
+	}
+
 	it("installs on a fresh home with no unit or state and starts held", () => {
 		const result = isolatedInstall(`
 [ ! -e "$checkout" ]
@@ -660,7 +684,11 @@ describe("exe.dev installer pure and isolated helpers (never a real install)", (
 	});
 
 	it("renders the selected repository without changing the static unit", () => {
-		const before = readFileSync(join(root, "server/factory.service"), "utf8");
+		const before = readFileSync(
+			join(root, "host/install/factory.service"),
+			"utf8",
+		);
+
 		const result = shell('repo=acme/widgets; render_unit "$2"', [root]);
 		assert.equal(result.status, 0, result.stderr);
 		assert.equal(
@@ -668,7 +696,7 @@ describe("exe.dev installer pure and isolated helpers (never a real install)", (
 			before.replace("--repo nublai/pi-herdr-factorio", "--repo acme/widgets"),
 		);
 		assert.equal(
-			readFileSync(join(root, "server/factory.service"), "utf8"),
+			readFileSync(join(root, "host/install/factory.service"), "utf8"),
 			before,
 		);
 	});
@@ -678,14 +706,14 @@ describe("exe.dev installer pure and isolated helpers (never a real install)", (
 
 		try {
 			const result = shell(
-				`mkdir "$2/server"; printf '%s\\n' 'ExecStart=/custom/node server/cli.ts serve --repo old/repo --state-dir /custom/state --issue 42' >"$2/server/factory.service"; repo=acme/widgets; render_unit "$2"`,
+				`mkdir -p "$2/host/install"; printf '%s\\n' 'ExecStart=/custom/node host/cli/index.ts serve --repo old/repo --state-dir /custom/state --issue 42' >"$2/host/install/factory.service"; repo=acme/widgets; render_unit "$2"`,
 				[dir],
 			);
 
 			assert.equal(result.status, 0, result.stderr);
 			assert.equal(
 				result.stdout,
-				"ExecStart=/custom/node server/cli.ts serve --repo acme/widgets --state-dir /custom/state --issue 42\n",
+				"ExecStart=/custom/node host/cli/index.ts serve --repo acme/widgets --state-dir /custom/state --issue 42\n",
 			);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
@@ -737,7 +765,7 @@ describe("exe.dev installer pure and isolated helpers (never a real install)", (
 			"sudo systemctl stop",
 			" clone --quiet",
 			" fetch --quiet",
-			'bash "$checkout/server/provision.sh"',
+			'bash "$checkout/host/install/provision.sh"',
 			"sudo systemctl enable",
 			"sudo systemctl restart",
 		]) {

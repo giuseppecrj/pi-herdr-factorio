@@ -13,8 +13,8 @@ import {
 import { advance, type RunEvent } from "../src/candidate/stages.ts";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, cpSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { fileRunFiles } from "../server/controller/run-files.ts";
-import { sandboxExecutor } from "../server/sandbox/executor.ts";
+import { fileRunFiles } from "../host/controller/run-files.ts";
+import { sandboxExecutor } from "../host/sandbox/executor.ts";
 import {
 	collectPatch,
 	storePatch,

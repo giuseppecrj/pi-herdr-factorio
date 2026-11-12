@@ -13,7 +13,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { EXIT, runCli } from "../server/cli.ts";
+import { EXIT } from "../host/cli/platform.ts";
+import { runCli } from "../host/cli/index.ts";
 import { loadWorkflow } from "../src/config/load.ts";
 import type { JsonValue } from "../src/core/json.ts";
 import { digestOf } from "../src/core/run.ts";

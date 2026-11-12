@@ -13,18 +13,16 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { checkCandidate, receiptPasses } from "../host/gates/gates.ts";
 import {
-	checkCandidate,
 	exportTree,
 	heldoutDigest,
 	materializeCandidate,
-	receiptPasses,
 	replacementDigest,
-	runDraftBase,
-	runHeldoutBase,
-	validateDependencies,
-	type GateRunner,
-} from "../server/gates.ts";
+} from "../host/gates/materialize.ts";
+import { runDraftBase, runHeldoutBase } from "../host/gates/base.ts";
+import { validateDependencies } from "../host/gates/manifest.ts";
+import { type GateRunner } from "../host/gates/runner.ts";
 import { assessBase, classifyFailure } from "../src/candidate/diagnosis.ts";
 import { isGitSha } from "../src/config/schema.ts";
 import { writeAcceptance } from "../src/contract/acceptance.ts";
@@ -619,7 +617,7 @@ test("visible suite excludes heavy integration tests without losing CI or gate c
 	);
 	assert.match(
 		readFileSync(join(root, ".github/workflows/ci.yml"), "utf8"),
-		/node --experimental-strip-types server\/cli\.ts gates/,
+		/node --experimental-strip-types host\/cli\/index\.ts gates/,
 	);
 });
 
