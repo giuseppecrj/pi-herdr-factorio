@@ -32,7 +32,7 @@ import { collectOwnerMetrics, runCli } from "../server/cli.ts";
 import { parseLedger, ledgerRow } from "../src/ledger.ts";
 import { gitObjectSha } from "../src/publication.ts";
 import type { InterventionRead } from "../src/metrics.ts";
-import type { JsonValue } from "../src/tickets.ts";
+import type { JsonValue } from "../src/core/json.ts";
 import { readOwnerFeed, readOwnerRun, type FeedEntry } from "../src/feed.ts";
 import { fileAdmissionStore } from "../src/admission.ts";
 import {
@@ -48,7 +48,7 @@ import {
 	systemdNotify,
 	writeStatus,
 } from "../server/controller.ts";
-import { digestOf, runIdOf } from "../src/run.ts";
+import { digestOf, runIdOf } from "../src/core/run.ts";
 import {
 	addRun,
 	now,

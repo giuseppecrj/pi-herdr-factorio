@@ -27,7 +27,7 @@ import { startGatewayProcess } from "../../../../../server/sandbox/gateway-clien
 import { builtinTable } from "../../../../../server/sandbox/routes.ts";
 import { stopScopeArgv } from "../../../../../server/sandbox/scope.ts";
 import { detectArch } from "../../../../../server/sandbox/seccomp.ts";
-import { isDigest } from "../../../../../src/run.ts";
+import { isDigest } from "../../../../../src/core/run.ts";
 import {
 	readPlatformFile,
 	resolvePlatform,

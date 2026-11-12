@@ -1,9 +1,9 @@
-import { digestOf, isDigest, runIdOf, type Digest } from "./run.ts";
+import { digestOf, isDigest, runIdOf, type Digest } from "./core/run.ts";
 import {
 	EFFICIENCY_COUNTS,
 	unknownEfficiency,
 	type EfficiencyFacts,
-} from "../server/sandbox/result.ts";
+} from "./core/execution.ts";
 import {
 	GitHubPublicationApi,
 	LEDGER_FILE,
@@ -29,7 +29,7 @@ import {
 	type VisibleCheck,
 } from "./diagnosis.ts";
 import type { TerminalStatus } from "./markers.ts";
-import type { Stage } from "./run.ts";
+import type { Stage } from "./core/run.ts";
 import {
 	isGitSha,
 	isRepoSlug,
@@ -45,7 +45,7 @@ import {
 	parseJson,
 	textOf,
 	type JsonValue,
-} from "../server/sandbox/json.ts";
+} from "./core/json.ts";
 
 export class LedgerRowError extends Error {
 	readonly code: string;

@@ -30,7 +30,7 @@ import {
 } from "../src/build.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
 import { feedbackPrompt } from "../src/review.ts";
-import { digestOf } from "../src/run.ts";
+import { digestOf } from "../src/core/run.ts";
 import { execFileSync } from "node:child_process";
 import { renderBuildSummary } from "../src/specify.ts";
 

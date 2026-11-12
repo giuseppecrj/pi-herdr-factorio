@@ -34,8 +34,8 @@ import {
 	type WritePermission,
 } from "./policy.ts";
 import { EXE_DEV_PLATFORM, type PlatformProfile } from "./platform.ts";
-import { type Digest, digestOf, isDigest, type NonEmpty } from "./run.ts";
-import type { JsonValue } from "./tickets.ts";
+import { type Digest, digestOf, isDigest, type NonEmpty } from "./core/run.ts";
+import type { JsonValue } from "./core/json.ts";
 import {
 	type EnvLookup,
 	type Exec,

@@ -11,8 +11,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { JsonValue } from "../src/tickets.ts";
-import { verdictPasses, digestOf, REQUIRED_CI_CHECKS } from "../src/run.ts";
+import type { JsonValue } from "../src/core/json.ts";
+import {
+	verdictPasses,
+	digestOf,
+	REQUIRED_CI_CHECKS,
+} from "../src/core/run.ts";
 import {
 	collectVerdict,
 	collectTrustedReport,

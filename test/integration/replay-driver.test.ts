@@ -28,7 +28,7 @@ import {
 	replayRow,
 	replayStageCaps,
 } from "../../src/replay.ts";
-import { digestOf, runIdOf } from "../../src/run.ts";
+import { digestOf, runIdOf } from "../../src/core/run.ts";
 import { ledgerRowOf } from "../../src/ledger.ts";
 
 // The reviewer's fake gh/serve + real socket-lock harness, made hermetic.
@@ -718,11 +718,15 @@ esac
 
 		const c3 = corpus.cases.find((c: { id: string }) => c.id === "c3");
 
-		const stageCaps = await replayStageCaps(sha, async (cmd, args) => ({
-			code: 0,
-			stdout: execFileSync(cmd, args, { cwd: control, encoding: "utf8" }),
-			stderr: "",
-		}));
+		const stageCaps = await replayStageCaps(sha, async (cmd, args) => {
+			const result = spawnSync(cmd, args, { cwd: control, encoding: "utf8" });
+
+			return {
+				code: result.status ?? 1,
+				stdout: result.stdout,
+				stderr: result.stderr,
+			};
+		});
 
 		assert.deepEqual(
 			JSON.parse(await readFile(join(root, "replay-restore.json"), "utf8")),

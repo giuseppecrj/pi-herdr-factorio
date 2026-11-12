@@ -49,9 +49,8 @@ import {
 	type RepairExecution,
 } from "../../src/handoff.ts";
 import { candidateBranch, storeOwnerPatch } from "../../src/publication.ts";
+import { certifyR8, type FamilyInput } from "../../src/core/models.ts";
 import {
-	certifyR8,
-	type FamilyInput,
 	familyClaimsHold,
 	ReviewEvidenceUnavailable,
 	reviewCandidate,
@@ -117,15 +116,15 @@ import {
 	objectOf,
 	parseJson,
 	textOf,
-} from "../../server/sandbox/json.ts";
+} from "../../src/core/json.ts";
 import { LineSplitter } from "../../server/sandbox/lines.ts";
 import { SseMeter } from "../../server/sandbox/meter.ts";
 import {
 	requestEfficiency,
 	aggregateEfficiency,
 	unknownEfficiency,
-	type StageReceipt,
-} from "../../server/sandbox/result.ts";
+} from "../../src/core/execution.ts";
+import { type StageReceipt } from "../../server/sandbox/result.ts";
 import type { RouteId, RouteTable } from "../../server/sandbox/routes.ts";
 import {
 	type AssistantEnd,
@@ -137,7 +136,7 @@ import {
 	classifyRefusal,
 	SessionTracker,
 } from "../../server/sandbox/settle.ts";
-import { type Digest, REVIEW_MAX_TOKENS } from "../../src/run.ts";
+import { type Digest, REVIEW_MAX_TOKENS } from "../../src/core/run.ts";
 import {
 	isGitSha,
 	isRepoSlug,
@@ -156,7 +155,7 @@ import {
 	readPatch,
 	finishPatch,
 } from "../../src/build.ts";
-import { digestOf } from "../../src/run.ts";
+import { digestOf } from "../../src/core/run.ts";
 import {
 	ACCEPTANCE_SKILLS,
 	ACCEPTANCE_TOOLS,

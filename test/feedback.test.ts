@@ -27,7 +27,7 @@ import {
 	sweepMergedFeedback,
 } from "../server/controller.ts";
 import { GitHubTicketAdapter } from "../src/adapters/github.ts";
-import { digestOf } from "../src/run.ts";
+import { digestOf } from "../src/core/run.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
 import {
 	FAKE_REPO,

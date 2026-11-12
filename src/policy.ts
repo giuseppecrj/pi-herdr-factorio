@@ -1,5 +1,5 @@
 import { posix } from "node:path";
-import { type NonEmpty, type RejectReason } from "./run.ts";
+import { type NonEmpty, type RejectReason } from "./core/run.ts";
 
 export const READY_LABEL = "factory:ready";
 

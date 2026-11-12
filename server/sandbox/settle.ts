@@ -4,8 +4,12 @@ import {
 	parseJson,
 	textOf,
 	type JsonValue,
-} from "./json.ts";
-import type { BudgetCap, RefusalSignal, SessionOutcome } from "./result.ts";
+} from "../../src/core/json.ts";
+import type {
+	BudgetCap,
+	RefusalSignal,
+	SessionOutcome,
+} from "../../src/core/execution.ts";
 import { type AssistantEnd, DIALOG_METHODS, type PiRecord } from "./rpc.ts";
 
 const MODEL_ID = /^[a-z0-9][a-z0-9-]*\/[A-Za-z0-9][A-Za-z0-9._:-]*$/;

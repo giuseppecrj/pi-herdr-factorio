@@ -41,7 +41,7 @@ import {
 	objectOf,
 	parseJson,
 	textOf,
-} from "../../server/sandbox/json.ts";
+} from "../../src/core/json.ts";
 import {
 	bundleMatchesSource,
 	manifestDigest,
@@ -77,7 +77,7 @@ import {
 } from "../../server/sandbox/seccomp.ts";
 import type { ExecResult } from "../../src/gh.ts";
 import type { LogFields } from "../../src/orchestrator.ts";
-import type { Digest } from "../../src/run.ts";
+import type { Digest } from "../../src/core/run.ts";
 import type { ModelId } from "../../src/workflow.ts";
 import { modelTable } from "./routes.cases.ts";
 import { EXE_DEV_PLATFORM } from "../../src/platform.ts";

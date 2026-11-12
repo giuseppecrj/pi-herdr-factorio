@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { regularText, readStoredContract } from "./artifacts.ts";
 import { fileAdmissionStore } from "./admission.ts";
 import { frozenRowOf } from "./ledger.ts";
-import { digestOf, isDigest, type Digest } from "./run.ts";
+import { digestOf, isDigest, type Digest } from "./core/run.ts";
 import {
 	objectOf,
 	parseJson,
@@ -11,7 +11,7 @@ import {
 	arrayOf,
 	countOf,
 	type JsonValue,
-} from "../server/sandbox/json.ts";
+} from "./core/json.ts";
 import { readStageReceipt } from "../server/sandbox.ts";
 
 export const EXPLAIN_MAX_TOKENS = 30_000;

@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { it } from "node:test";
 import { parseWorkflow, isGitSha } from "../src/workflow.ts";
-import { digestOf, runIdOf } from "../src/run.ts";
+import { digestOf, runIdOf } from "../src/core/run.ts";
 import {
 	sampled,
 	scorerDigest,

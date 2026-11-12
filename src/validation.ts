@@ -10,7 +10,7 @@ import {
 	isDigest,
 	type Verdict,
 	verdictPasses,
-} from "./run.ts";
+} from "./core/run.ts";
 import {
 	type Publication,
 	type PublishedFile,
@@ -28,10 +28,10 @@ import {
 	textOf,
 	textsOf,
 	type JsonValue,
-} from "../server/sandbox/json.ts";
+} from "./core/json.ts";
 import { type FailureClass, parseFailureClass } from "./diagnosis.ts";
 
-export { REQUIRED_CI_CHECKS } from "./run.ts";
+export { REQUIRED_CI_CHECKS } from "./core/run.ts";
 
 export const CI_DEADLINE_MS = 1_200_000;
 export const DISPATCH_SETTLE_MS = 120_000;

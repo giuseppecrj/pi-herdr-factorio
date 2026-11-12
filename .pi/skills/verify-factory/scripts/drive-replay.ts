@@ -1,4 +1,4 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
 import {
 	mkdir,
 	open,
@@ -121,9 +121,9 @@ async function settle(): Promise<void> {
 	] = await Promise.all([
 		import("../../../../src/replay.ts"),
 		import("../../../../server/controller.ts"),
-		import("../../../../src/run.ts"),
+		import("../../../../src/core/run.ts"),
 		import("../../../../src/platform.ts"),
-		import("../../../../server/sandbox/json.ts"),
+		import("../../../../src/core/json.ts"),
 	]);
 
 	const [budget, state, path, log, terminal] = [
@@ -231,9 +231,7 @@ async function settle(): Promise<void> {
 }
 
 async function restoreRecord(): Promise<JsonObject> {
-	const { objectOf, parseJson } = await import(
-		"../../../../server/sandbox/json.ts"
-	);
+	const { objectOf, parseJson } = await import("../../../../src/core/json.ts");
 
 	const record = objectOf(parseJson(await readFile(arg(0), "utf8")));
 
@@ -242,13 +240,13 @@ async function restoreRecord(): Promise<JsonObject> {
 	return record;
 }
 
-type JsonObject = import("../../../../server/sandbox/json.ts").JsonObject;
+type JsonObject = import("../../../../src/core/json.ts").JsonObject;
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
 async function recoveryCommand(): Promise<void> {
 	const { fieldOf, objectOf, parseJson } = await import(
-		"../../../../server/sandbox/json.ts"
+		"../../../../src/core/json.ts"
 	);
 
 	const parsed = parseJson(await readFile(arg(0), "utf8"));
@@ -280,7 +278,7 @@ async function recoveryCommand(): Promise<void> {
 
 async function restoreFields(): Promise<void> {
 	const { boolOf, fieldOf, textOf } = await import(
-		"../../../../server/sandbox/json.ts"
+		"../../../../src/core/json.ts"
 	);
 
 	const [lane, production, sandbox] = [arg(1), arg(2), arg(3)];
@@ -316,7 +314,7 @@ async function restoreFields(): Promise<void> {
 
 async function fixtureDisarmed(): Promise<void> {
 	const { arrayOf, fieldOf, objectOf, parseJson, textOf } = await import(
-		"../../../../server/sandbox/json.ts"
+		"../../../../src/core/json.ts"
 	);
 
 	const issue = objectOf(parseJson(await readFile(arg(0), "utf8")));
@@ -338,7 +336,7 @@ async function fixtureReady(): Promise<void> {
 		{ arrayOf, fieldOf, objectOf, parseJson, textOf },
 	] = await Promise.all([
 		import("../../../../src/replay.ts"),
-		import("../../../../server/sandbox/json.ts"),
+		import("../../../../src/core/json.ts"),
 	]);
 
 	const [path, id] = [arg(0), arg(1)];
@@ -525,11 +523,15 @@ async function prepare(): Promise<void> {
 
 	if (!c) throw Error("replay_case_unknown");
 
-	const stageCaps = await replayStageCaps(headSha, async (cmd, cmdArgs) => ({
-		code: 0,
-		stdout: execFileSync(cmd, [...cmdArgs], { encoding: "utf8" }),
-		stderr: "",
-	}));
+	const stageCaps = await replayStageCaps(headSha, async (cmd, cmdArgs) => {
+		const result = spawnSync(cmd, [...cmdArgs], { encoding: "utf8" });
+
+		return {
+			code: result.status ?? 1,
+			stdout: result.stdout,
+			stderr: result.stderr,
+		};
+	});
 
 	await writeFile(
 		record,

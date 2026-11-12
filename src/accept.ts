@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { digestOf, type Digest } from "./run.ts";
+import { digestOf, type Digest } from "./core/run.ts";
 import {
 	acceptanceSourcePath,
 	type Contract,
@@ -23,7 +23,7 @@ import {
 	textOf,
 	textsOf,
 	type JsonObject,
-} from "../server/sandbox/json.ts";
+} from "./core/json.ts";
 
 export const ACCEPTANCE_ISOLATION =
 	"context-isolated, same family, not cross-family";

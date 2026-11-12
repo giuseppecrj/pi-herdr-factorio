@@ -24,8 +24,8 @@ import {
 	snapshotDigest,
 } from "../src/admission.ts";
 import type { BodyHistory } from "../src/adapters/github.ts";
-import { digestOf } from "../src/run.ts";
-import type { JsonValue } from "../src/tickets.ts";
+import { digestOf } from "../src/core/run.ts";
+import type { JsonValue } from "../src/core/json.ts";
 import { isRepoSlug, loadWorkflow, type RepoSlug } from "../src/workflow.ts";
 import {
 	FAKE_REPO,

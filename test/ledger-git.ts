@@ -11,7 +11,7 @@ import {
 	parseJson,
 	textOf,
 	type JsonValue,
-} from "../server/sandbox/json.ts";
+} from "../src/core/json.ts";
 
 const slug = "giuseppecrj/pi-herdr-factorio";
 

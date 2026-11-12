@@ -22,7 +22,7 @@ import {
 } from "../src/diagnosis.ts";
 import { parseDraftDetails } from "../server/gates.ts";
 import { controllerBaseChecker } from "../server/controller.ts";
-import { digestOf } from "../src/run.ts";
+import { digestOf } from "../src/core/run.ts";
 import { contractDigestOf } from "../src/specify.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
 

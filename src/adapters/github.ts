@@ -11,11 +11,10 @@ import {
 	REPO_SWITCH_LABEL,
 } from "../policy.ts";
 import { type Exec, type ExecResult, type GhCause, ghFailure } from "../gh.ts";
-import type { TicketRef } from "../run.ts";
+import type { TicketRef } from "../core/run.ts";
 import {
 	type CommentPost,
 	type FactoryEvent,
-	type JsonValue,
 	type LabelWrite,
 	type Ticket,
 	type TicketReader,
@@ -23,8 +22,9 @@ import {
 	type TicketWriter,
 	ticketKey,
 } from "../tickets.ts";
+import { type JsonValue } from "../core/json.ts";
 import { isGitSha, type GitSha, type RepoSlug } from "../workflow.ts";
-import type { Digest } from "../run.ts";
+import type { Digest } from "../core/run.ts";
 
 export type Login = string & { readonly __brand: "Login" };
 

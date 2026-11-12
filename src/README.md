@@ -2,7 +2,11 @@
 
 `src/` holds the factory's rules: what a run is, which stages may run, what a contract, ledger row, verdict or marker may contain, and what the controller does next. `extension/index.ts` imports it, and the published package ships it.
 
-Host work stays in `server/`. That means processes, sandboxes, the gateway, gates, the viewer and installation. New code in `src/` must not import `server/`. `npm run check:layout` fails a new `src` to `server` import. The 23 existing ones are listed in `scripts/layout-baseline.json` under `imports.reverseEdges`, and that list may only shrink.
+Host work stays in `server/`. That means processes, sandboxes, the gateway, gates, the viewer and installation. New code in `src/` must not import `server/`. `npm run check:layout` fails a new `src` to `server` import. The 5 existing ones are listed in `scripts/layout-baseline.json` under `imports.reverseEdges`, and that list may only shrink.
+
+## `src/core`
+
+`src/core/` holds the facts every other part of the factory shares, with no host code. `run.ts` defines runs, outcomes, verdicts and digests. `json.ts` parses JSON at I/O boundaries. `models.ts` holds the Anthropic limits table and model-family evidence. `journal.ts` reads a gateway request journal back into settlements and charges. `execution.ts` holds stage outcomes, usage and efficiency facts. A core file never imports `server/` or `host/`. The gateway's audit writer and the host's stage receipt stay in `server/sandbox/`.
 
 ## Files by planned owner
 
@@ -10,7 +14,6 @@ Host work stays in `server/`. That means processes, sandboxes, the gateway, gate
 
 | Planned owner | Files |
 | --- | --- |
-| `src/core` | `run.ts` |
 | `src/trust` | `policy.ts`, `platform.ts`, `admission.ts`, `markers.ts` |
 | `src/config` | `workflow.ts` |
 | `src/github` | `adapters/github.ts`, `gh.ts`, `tickets.ts`, `publication.ts` |

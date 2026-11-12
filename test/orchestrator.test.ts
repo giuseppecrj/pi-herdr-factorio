@@ -27,7 +27,7 @@ import {
 	type StageHost,
 } from "../server/sandbox.ts";
 import { PassThrough } from "node:stream";
-import type { JsonValue } from "../src/tickets.ts";
+import type { JsonValue } from "../src/core/json.ts";
 import type { FeedbackObservation } from "../src/feedback.ts";
 import { readAttention } from "../src/attention.ts";
 import type { ControlEvent } from "../server/sandbox/control.ts";
@@ -90,7 +90,8 @@ import {
 	type StageResult,
 	type TickReport,
 } from "../src/orchestrator.ts";
-import { type SessionOutcome, stageResult } from "../server/sandbox/result.ts";
+import { type SessionOutcome } from "../src/core/execution.ts";
+import { stageResult } from "../server/sandbox/result.ts";
 import { READY_LABEL } from "../src/policy.ts";
 import {
 	classifiedCase,
@@ -143,7 +144,7 @@ import {
 	parseCandidateState,
 	type CandidateState,
 } from "../src/handoff.ts";
-import type { Run } from "../src/run.ts";
+import type { Run } from "../src/core/run.ts";
 import {
 	blocksReview,
 	candidateReviewPrompt,
@@ -159,7 +160,7 @@ import {
 	runIdOf,
 	REPAIR_BUILD_MAX_TOKENS,
 	REVIEW_MAX_TOKENS,
-} from "../src/run.ts";
+} from "../src/core/run.ts";
 import {
 	type GitSha,
 	isGitSha,
@@ -596,7 +597,7 @@ class FakeExecutor implements StageExecutor {
 
 	assess(
 		input: import("../src/validation.ts").ValidationInput,
-		verdict: import("../src/run.ts").Verdict,
+		verdict: import("../src/core/run.ts").Verdict,
 	) {
 		const round = input.round ?? 0;
 		const generation = input.generation?.generation ?? 0;
@@ -10942,7 +10943,7 @@ function validationOf(claim: ClaimRecord | undefined) {
 		: claim?.validation;
 }
 
-function reportOf(verdict: import("../src/run.ts").Verdict) {
+function reportOf(verdict: import("../src/core/run.ts").Verdict) {
 	if (!isGitSha(verdict.candidateSha) || !isGitSha(verdict.gateSha))
 		throw new Error("report fixture");
 
@@ -11959,7 +11960,7 @@ describe("controller-only validate", () => {
 				creates = 0,
 				comments = 0;
 
-			const ok = (value: import("../src/tickets.ts").JsonValue) => ({
+			const ok = (value: import("../src/core/json.ts").JsonValue) => ({
 				code: 0,
 				stdout: JSON.stringify(value),
 				stderr: "",
@@ -13718,7 +13719,7 @@ describe("controller-only validate", () => {
 				const output = f.executor.output.bind(f.executor);
 				const prepare = f.executor.prepareReview!;
 
-				const refuse = (verdict: import("../src/run.ts").Verdict) => {
+				const refuse = (verdict: import("../src/core/run.ts").Verdict) => {
 					const refusal = candidateReviewPrompt({
 						contract: contract.contract,
 						diff,

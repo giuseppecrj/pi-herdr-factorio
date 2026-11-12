@@ -20,16 +20,18 @@ import {
 	type ReviewReceipt,
 	type SeatReceipt,
 	type SeatResult,
+	familyClaimsHold,
+	reviewR8,
+} from "../src/review.ts";
+import {
 	certifyR8,
 	crossFamily,
 	type FamilyInput,
-	familyClaimsHold,
 	familyFromJournal,
 	familyLabel,
 	familyOf,
 	parseFamily,
-	reviewR8,
-} from "../src/review.ts";
+} from "../src/core/models.ts";
 
 import {
 	passingVerdict,
@@ -44,7 +46,7 @@ import {
 	reviewReceiptDigest,
 	type RepairCause,
 } from "../src/handoff.ts";
-import { digestOf } from "../src/run.ts";
+import { digestOf } from "../src/core/run.ts";
 import {
 	mkdtempSync,
 	cpSync,
@@ -73,7 +75,7 @@ import {
 } from "../src/specify.ts";
 import { writeAcceptance } from "../src/accept.ts";
 import { isGitSha, isRepoSlug } from "../src/workflow.ts";
-import { objectOf, parseJson, textOf } from "../server/sandbox/json.ts";
+import { objectOf, parseJson, textOf } from "../src/core/json.ts";
 import { EXE_DEV_PLATFORM } from "../src/platform.ts";
 
 async function checkReviewTree(mode: string) {

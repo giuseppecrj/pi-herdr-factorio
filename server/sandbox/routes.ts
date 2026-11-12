@@ -16,7 +16,7 @@ import {
 	objectOf,
 	textOf,
 	textsOf,
-} from "./json.ts";
+} from "../../src/core/json.ts";
 
 export type RouteId = string & { readonly __brand: "RouteId" };
 

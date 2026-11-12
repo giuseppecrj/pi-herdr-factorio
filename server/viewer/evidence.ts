@@ -19,9 +19,9 @@ import {
 	textOf,
 	type JsonObject,
 	type JsonValue,
-} from "../sandbox/json.ts";
+} from "../../src/core/json.ts";
 import { childUsageOf } from "../sandbox/settle.ts";
-import { isDigest, runIdOf } from "../../src/run.ts";
+import { isDigest, runIdOf } from "../../src/core/run.ts";
 import { isRepoSlug, isGitSha } from "../../src/workflow.ts";
 import { isLogin } from "../../src/adapters/github.ts";
 import { parseMarker } from "../../src/markers.ts";
@@ -38,7 +38,7 @@ import {
 	type CandidateExecution,
 } from "../../src/handoff.ts";
 import { reviewDir, type ReviewReceipt } from "../../src/review.ts";
-import { blocksReview, type Verdict } from "../../src/run.ts";
+import { blocksReview, type Verdict } from "../../src/core/run.ts";
 
 export const markerHistoryGap =
 	"marker comment history is not retained locally; claim is only the latest state";

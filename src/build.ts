@@ -33,16 +33,10 @@ import {
 	type CheckAssessment,
 	type CheckEnvironment,
 } from "./diagnosis.ts";
-import { digestOf, isDigest, type Digest } from "./run.ts";
+import { digestOf, isDigest, type Digest } from "./core/run.ts";
 import { renderInlined, type Contract, type InlinedFile } from "./specify.ts";
 import type { Guidance } from "./workflow.ts";
-import {
-	arrayOf,
-	fieldOf,
-	objectOf,
-	parseJson,
-	textOf,
-} from "../server/sandbox/json.ts";
+import { arrayOf, fieldOf, objectOf, parseJson, textOf } from "./core/json.ts";
 
 export const BUILD_TOOLS = [
 	"read",

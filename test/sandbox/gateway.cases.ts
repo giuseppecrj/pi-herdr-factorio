@@ -24,8 +24,8 @@ import {
 	type AuditRecord,
 	JOURNAL_FILE,
 	type JournalRecord,
-	journalCharge,
 } from "../../server/sandbox/audit.ts";
+import { journalCharge } from "../../src/core/journal.ts";
 import { startGatewayProcess } from "../../server/sandbox/gateway-client.ts";
 import { executionCharge } from "../../server/sandbox.ts";
 import {
@@ -43,7 +43,7 @@ import {
 	ANTHROPIC_REPLAYS,
 	type EchoFixture,
 } from "../../server/sandbox/echo-fixture.ts";
-import { familyFromJournal } from "../../src/review.ts";
+import { familyFromJournal } from "../../src/core/models.ts";
 import {
 	addressAllowed,
 	dialOrder,
@@ -61,7 +61,7 @@ import {
 	ECHO_SECRET,
 	LINEAR_CEILING,
 } from "./credentials.cases.ts";
-import type { JsonValue } from "../../src/tickets.ts";
+import type { JsonValue } from "../../src/core/json.ts";
 import { anthropicTable, modelTable } from "./routes.cases.ts";
 
 import { assertReaderParity } from "./settlement-fixtures.ts";

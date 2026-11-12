@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { decideAdmission, checkChangedPaths } from "../src/policy.ts";
-import { outcomeOf, type Run } from "../src/run.ts";
+import { outcomeOf, type Run } from "../src/core/run.ts";
 import { advance, type RunEvent } from "../src/stages.ts";
 import { type FactoryEvent, type Ticket, ticketKey } from "../src/tickets.ts";
 import { FakeTicketAdapter } from "./fake-ticket-adapter.ts";

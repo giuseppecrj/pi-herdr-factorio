@@ -16,7 +16,7 @@ import {
 } from "../../../../../server/controller.ts";
 import { prepareRepairTree, readPatch } from "../../../../../src/build.ts";
 import { acceptanceEntries } from "../../../../../src/accept.ts";
-import { digestOf, isDigest } from "../../../../../src/run.ts";
+import { digestOf, isDigest } from "../../../../../src/core/run.ts";
 import {
 	readPlatformFile,
 	resolvePlatform,
@@ -26,7 +26,7 @@ import {
 	objectOf,
 	parseJson,
 	textOf,
-} from "../../../../../server/sandbox/json.ts";
+} from "../../../../../src/core/json.ts";
 import { isGitSha } from "../../../../../src/workflow.ts";
 import {
 	launchSandbox,

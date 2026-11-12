@@ -13,11 +13,11 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 import { readAttention, ATTENTION_KINDS } from "../src/attention.ts";
 import { readOwnerFeed } from "../src/feed.ts";
-import { digestOf, runIdOf } from "../src/run.ts";
+import { digestOf, runIdOf } from "../src/core/run.ts";
 import { isRepoSlug, parseWorkflow } from "../src/workflow.ts";
 import { runCli } from "../server/cli.ts";
 import { registerFactory } from "../extension/index.ts";
-import type { JsonValue } from "../src/tickets.ts";
+import type { JsonValue } from "../src/core/json.ts";
 import {
 	beginCandidate,
 	handoffCandidate,
@@ -27,7 +27,7 @@ import {
 } from "../src/handoff.ts";
 import { dispatchNonce } from "../src/validation.ts";
 import { candidateBranch } from "../src/publication.ts";
-import { REQUIRED_CI_CHECKS } from "../src/run.ts";
+import { REQUIRED_CI_CHECKS } from "../src/core/run.ts";
 import { isGitSha } from "../src/workflow.ts";
 import type { PatchReceipt } from "../src/build.ts";
 import { execFileSync } from "node:child_process";

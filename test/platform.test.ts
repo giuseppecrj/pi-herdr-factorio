@@ -48,8 +48,8 @@ import {
 	resolvePlatform,
 } from "../src/platform.ts";
 import { reserveReplay } from "../src/replay.ts";
-import { digestOf, runIdOf } from "../src/run.ts";
-import type { JsonValue } from "../src/tickets.ts";
+import { digestOf, runIdOf } from "../src/core/run.ts";
+import type { JsonValue } from "../src/core/json.ts";
 import {
 	type Exec,
 	type GitSha,

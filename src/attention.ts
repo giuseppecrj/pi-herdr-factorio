@@ -1,8 +1,8 @@
 import { lstat, readFile, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { isDigest, type Digest, runIdOf } from "./run.ts";
+import { isDigest, type Digest, runIdOf } from "./core/run.ts";
 import { isRepoSlug, type RepoSlug } from "./workflow.ts";
-import type { JsonValue } from "./tickets.ts";
+import type { JsonValue } from "./core/json.ts";
 import { parseCandidateState, candidateProjection } from "./handoff.ts";
 import { parseMarker, MARKER_PREFIX } from "./markers.ts";
 import { FEEDBACK_UNAVAILABLE_REASONS } from "./feedback.ts";

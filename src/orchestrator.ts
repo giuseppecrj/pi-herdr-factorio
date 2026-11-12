@@ -24,13 +24,12 @@ import {
 	REVIEW_TOOLS,
 	ReviewEvidenceUnavailable,
 	reviewSeats,
-	type FamilyInput,
-	withFamily,
 	type ReviewInput,
 	type ReviewInputRefusal,
 	type ReviewReceipt,
 } from "./review.ts";
-import type { Verdict } from "./run.ts";
+import { type FamilyInput, withFamily } from "./core/models.ts";
+import type { Verdict } from "./core/run.ts";
 import type { FeedbackObservation, FeedbackBatch } from "./feedback.ts";
 import { PublicationError } from "./publication.ts";
 
@@ -92,7 +91,7 @@ import {
 	type TerminalStatus,
 } from "./markers.ts";
 import { hasWriteAccess, READY_LABEL } from "./policy.ts";
-import { type Digest, type NonEmpty, runIdOf, type Stage } from "./run.ts";
+import { type Digest, type NonEmpty, runIdOf, type Stage } from "./core/run.ts";
 import {
 	type Answer,
 	type AnswersRecord,
@@ -138,10 +137,8 @@ import {
 import type { CadenceRunner } from "./cadence.ts";
 import type { PlatformProfile } from "./platform.ts";
 import { isLogin } from "./adapters/github.ts";
-import type {
-	StageResult,
-	StageRunSettings,
-} from "../server/sandbox/result.ts";
+import type { StageResult } from "../server/sandbox/result.ts";
+import type { StageRunSettings } from "./core/execution.ts";
 import {
 	DEFAULTS,
 	type AcceptEffort,
@@ -156,7 +153,7 @@ import {
 	parseWorkflow,
 	WORKFLOW_PATH,
 } from "./workflow.ts";
-import { digestOf, isDigest } from "./run.ts";
+import { digestOf, isDigest } from "./core/run.ts";
 import {
 	LedgerRowError,
 	candidateCause,
@@ -168,7 +165,7 @@ import {
 	type AttemptEnd,
 	type RunAccounting,
 } from "./ledger.ts";
-import type { JsonValue } from "./tickets.ts";
+import type { JsonValue } from "./core/json.ts";
 
 export type { StageResult };
 
@@ -179,7 +176,7 @@ export type Clock = { now(): number };
 export type StageLaunch =
 	| {
 			readonly kind: "unavailable";
-			readonly stage: import("./run.ts").SandboxStage;
+			readonly stage: import("./core/run.ts").SandboxStage;
 			readonly reason: "sandbox_unavailable";
 	  }
 	| { readonly kind: "started"; readonly done: Promise<StageResult> };

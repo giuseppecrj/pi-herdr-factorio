@@ -314,7 +314,7 @@
 		"expected": "passed",
 		"replacements": [],
 		"heldout_dir": "test/acceptance/124",
-		"heldout_digest": "4dc163886e616056ac8e059faadd93e9ca87e1d683cba785fe9612acbe93eac0"
+		"heldout_digest": "08420e32f10592ca7fd9d647c76e9c1d7ba69e04124600a4488e92c61fa19170"
 	},
 	{
 		"name": "uppercase-ts-nocheck",

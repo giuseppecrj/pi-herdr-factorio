@@ -150,9 +150,9 @@ import {
 	textOf,
 	textsOf,
 	countOf,
-} from "./sandbox/json.ts";
+} from "../src/core/json.ts";
 import { type Exec } from "../src/gh.ts";
-import { digestOf, type Verdict, type Stage } from "../src/run.ts";
+import { digestOf, type Verdict, type Stage } from "../src/core/run.ts";
 import {
 	frozenRowOf,
 	parseLedger,
@@ -192,8 +192,8 @@ import {
 	type HandoffSettings,
 	type WorkflowConfig,
 } from "../src/workflow.ts";
+import { FAMILY_MISSING } from "../src/core/models.ts";
 import {
-	FAMILY_MISSING,
 	familyClaimsHold,
 	reviewR8,
 	findingFingerprints,
@@ -270,7 +270,7 @@ import {
 	parseMarker,
 	MARKER_PREFIX,
 } from "../src/markers.ts";
-import { type Digest, isDigest } from "../src/run.ts";
+import { type Digest, isDigest } from "../src/core/run.ts";
 import type {
 	Checkout,
 	CheckoutResult,
@@ -295,7 +295,7 @@ import {
 	isAnswersDigest,
 	isQuestionsDigest,
 } from "../src/specify.ts";
-import type { JsonValue } from "../src/tickets.ts";
+import type { JsonValue } from "../src/core/json.ts";
 import type { GitSha, RepoSlug } from "../src/workflow.ts";
 
 export const HOLDER_FILE = "controller.lock";
@@ -3349,7 +3349,7 @@ export async function readTerminalEvidence(
 		await import("./sandbox.ts");
 
 	const { aggregateEfficiency, unknownEfficiency } = await import(
-		"./sandbox/result.ts"
+		"../src/core/execution.ts"
 	);
 
 	const root = join(resolve(stateDir), "stages", runId);
@@ -3380,7 +3380,7 @@ export async function readTerminalEvidence(
 			uncertain: number;
 			wall: number;
 			wallComplete: boolean;
-			efficiency: import("./sandbox/result.ts").EfficiencyFacts[];
+			efficiency: import("../src/core/execution.ts").EfficiencyFacts[];
 		}
 	>();
 
@@ -3392,7 +3392,7 @@ export async function readTerminalEvidence(
 	const digests = new Set<Digest>();
 
 	const executions: {
-		facts: import("./sandbox/result.ts").EfficiencyFacts;
+		facts: import("../src/core/execution.ts").EfficiencyFacts;
 		started: number | null;
 	}[] = [];
 

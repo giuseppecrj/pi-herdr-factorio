@@ -1,7 +1,7 @@
 import ts from "typescript";
 import { builtinModules } from "node:module";
 import { readFileSync } from "node:fs";
-import { fieldOf, objectOf, parseJson, textOf, textsOf } from "../../../server/sandbox/json.ts";
+import { fieldOf, objectOf, parseJson, textOf, textsOf } from "../../../src/core/json.ts";
 
 export type Signal = { path: string; line: number; rule: string };
 

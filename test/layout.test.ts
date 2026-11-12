@@ -25,7 +25,7 @@ import {
 	parseJson,
 	textOf,
 	textsOf,
-} from "../server/sandbox/json.ts";
+} from "../src/core/json.ts";
 
 const repo = fileURLToPath(new URL("../", import.meta.url));
 const guard = join(repo, "scripts/check-layout.mjs");
@@ -243,27 +243,27 @@ describe("layout guard", () => {
 	describe("imports", () => {
 		it("fails the trusted scanner when the JSON module it imports is removed", () => {
 			const root = scratch();
-			rmSync(join(root, "server/sandbox/json.ts"));
+			rmSync(join(root, "src/core/json.ts"));
 
 			includesMatch(
 				layout(root, "imports"),
-				/^imports: \.github\/factory\/gates\/scan\.ts imports \.\.\/\.\.\/\.\.\/server\/sandbox\/json\.ts, but server\/sandbox\/json\.ts does not exist$/,
+				/^imports: \.github\/factory\/gates\/scan\.ts imports \.\.\/\.\.\/\.\.\/src\/core\/json\.ts, but src\/core\/json\.ts does not exist$/,
 			);
 		});
 
 		it("reports every category when a module the guard loads is removed", () => {
 			const root = scratch();
-			rmSync(join(root, "server/sandbox/json.ts"));
+			rmSync(join(root, "src/core/json.ts"));
 
 			const { status, problems } = run(guard, root);
 			assert.equal(status, 1);
 			includesMatch(
 				problems,
-				/^imports: \.github\/factory\/gates\/scan\.ts imports \.\.\/\.\.\/\.\.\/server\/sandbox\/json\.ts, but server\/sandbox\/json\.ts does not exist$/,
+				/^imports: \.github\/factory\/gates\/scan\.ts imports \.\.\/\.\.\/\.\.\/src\/core\/json\.ts, but src\/core\/json\.ts does not exist$/,
 			);
 			includesMatch(
 				problems,
-				/^classification: cannot load src\/review\.ts: .*server\/sandbox\/json\.ts/,
+				/^classification: cannot load src\/review\.ts: .*src\/core\/json\.ts/,
 			);
 			includesMatch(
 				problems,
@@ -274,22 +274,22 @@ describe("layout guard", () => {
 		it("fails an unlisted reverse edge into server or host", () => {
 			const root = scratch();
 			appendFileSync(
-				join(root, "src/run.ts"),
-				'export { readLock } from "../server/controller.ts";\nimport "../host/cli/index.ts";\n',
+				join(root, "src/core/run.ts"),
+				'export { readLock } from "../../server/controller.ts";\nimport "../../host/cli/index.ts";\n',
 			);
 
 			const problems = layout(root, "imports");
 			includesMatch(
 				problems,
-				/src\/run\.ts -> server\/controller\.ts is a new reverse edge/,
+				/src\/core\/run\.ts -> server\/controller\.ts is a new reverse edge/,
 			);
 			includesMatch(
 				problems,
-				/src\/run\.ts -> host\/cli\/index\.ts is a new reverse edge/,
+				/src\/core\/run\.ts -> host\/cli\/index\.ts is a new reverse edge/,
 			);
 			includesMatch(
 				problems,
-				/src\/run\.ts imports \.\.\/host\/cli\/index\.ts, but host\/cli\/index\.ts does not exist/,
+				/src\/core\/run\.ts imports \.\.\/\.\.\/host\/cli\/index\.ts, but host\/cli\/index\.ts does not exist/,
 			);
 		});
 
@@ -297,14 +297,14 @@ describe("layout guard", () => {
 			const root = scratch();
 			edit(
 				root,
-				"src/workflow.ts",
-				"../server/sandbox/anthropic-limits.ts",
-				"./run.ts",
+				"src/replay.ts",
+				"../server/sandbox/manifest.ts",
+				"./core/run.ts",
 			);
 
 			includesMatch(
 				layout(root, "imports"),
-				/src\/workflow\.ts -> server\/sandbox\/anthropic-limits\.ts is listed in reverseEdges but no longer exists/,
+				/src\/replay\.ts -> server\/sandbox\/manifest\.ts is listed in reverseEdges but no longer exists/,
 			);
 		});
 
@@ -433,19 +433,19 @@ describe("layout guard", () => {
 
 		it("fails an extraction that drops a seat its source required", () => {
 			const root = scratch();
-			write(root, "src/core/json.ts", "export const x = 1;\n");
+			write(root, "src/core/extracted.ts", "export const x = 1;\n");
 			const seats = '["code-review", "security-review", "simplify"]';
 
 			edit(
 				root,
 				"scripts/layout-baseline.json",
 				/"files": \{\n/,
-				`"files": {\n\t\t\t"src/core/json.ts": { "owner": "src/core", "seats": ${seats}, "from": ["server/sandbox/json.ts"], "since": "L03" },\n`,
+				`"files": {\n\t\t\t"src/core/extracted.ts": { "owner": "src/core", "seats": ${seats}, "from": ["server/sandbox/json.ts"], "since": "L03" },\n`,
 			);
 
 			includesMatch(
 				layout(root, "classification"),
-				/^classification: src\/core\/json\.ts drops review seat ultrareview inherited from server\/sandbox\/json\.ts$/,
+				/^classification: src\/core\/extracted\.ts drops review seat ultrareview inherited from server\/sandbox\/json\.ts$/,
 			);
 		});
 
@@ -478,7 +478,7 @@ describe("layout guard", () => {
 
 		it("fails a recorded seat that reviewSeats no longer grants", () => {
 			const root = scratch();
-			write(root, "src/core/json.ts", "export const x = 1;\n");
+			write(root, "src/extracted.ts", "export const x = 1;\n");
 
 			const seats =
 				'["code-review", "security-review", "simplify", "ultrareview"]';
@@ -487,17 +487,17 @@ describe("layout guard", () => {
 				root,
 				"scripts/layout-baseline.json",
 				/"files": \{\n/,
-				`"files": {\n\t\t\t"src/core/json.ts": { "owner": "src/core", "seats": ${seats}, "from": ["server/sandbox/json.ts", "src/gone.ts"], "since": "L03" },\n`,
+				`"files": {\n\t\t\t"src/extracted.ts": { "owner": "src/core", "seats": ${seats}, "from": ["server/sandbox/json.ts", "src/gone.ts"], "since": "L03" },\n`,
 			);
 
 			const problems = layout(root, "classification");
 			includesMatch(
 				problems,
-				/^classification: src\/core\/json\.ts requires review seat ultrareview, but reviewSeats gives code-review,security-review,simplify$/,
+				/^classification: src\/extracted\.ts requires review seat ultrareview, but reviewSeats gives code-review,security-review,simplify$/,
 			);
 			includesMatch(
 				problems,
-				/^classification: src\/core\/json\.ts names unknown source src\/gone\.ts$/,
+				/^classification: src\/extracted\.ts names unknown source src\/gone\.ts$/,
 			);
 		});
 	});
@@ -816,7 +816,7 @@ describe("layout guard", () => {
 		it("fails a new unresolved literal and an allowlist entry nothing needs", () => {
 			const root = scratch();
 			appendFileSync(
-				join(root, "src/run.ts"),
+				join(root, "src/core/run.ts"),
 				'export const NOWHERE = "src/nowhere.ts";\n',
 			);
 			edit(
@@ -829,7 +829,7 @@ describe("layout guard", () => {
 			const problems = layout(root, "literals");
 			includesMatch(
 				problems,
-				/^literals: src\/run\.ts:\d+ names src\/nowhere\.ts, which does not exist; fix the path, or add it to literals\.allow/,
+				/^literals: src\/core\/run\.ts:\d+ names src\/nowhere\.ts, which does not exist; fix the path, or add it to literals\.allow/,
 			);
 			includesMatch(
 				problems,
@@ -1143,14 +1143,14 @@ describe("layout guard", () => {
 	describe("citations", () => {
 		it("fails missing and out-of-range current citations and checks pinned ones by form", () => {
 			const root = scratch();
-			const lines = read(root, "src/run.ts").split("\n").length - 1;
+			const lines = read(root, "src/core/run.ts").split("\n").length - 1;
 
 			appendFileSync(
 				join(root, "docs/operations/viewer.md"),
 				[
 					"See `src/missing.ts:3`.",
-					`See \`src/run.ts:${lines + 1}\` and \`src/run.ts\` line ${lines + 5}.`,
-					`See \`src/run.ts:${lines}\` and 5bd77d5:src/gone.ts:12.`,
+					`See \`src/core/run.ts:${lines + 1}\` and \`src/core/run.ts\` line ${lines + 5}.`,
+					`See \`src/core/run.ts:${lines}\` and 5bd77d5:src/gone.ts:12.`,
 					"See 5bd77d5:src/gone.ts:0.",
 					"",
 				].join("\n"),
@@ -1175,8 +1175,8 @@ describe("layout guard", () => {
 				[
 					`citations: docs/operations/sandbox.md is listed as pinned to f88069f, but no longer says "Repo paths are relative to \`pi-herdr-factorio/\` at \`f88069f\`."`,
 					`citations: docs/operations/viewer.md:${viewer + 1} cites src/missing.ts, which does not exist`,
-					`citations: docs/operations/viewer.md:${viewer + 2} cites src/run.ts:${lines + 1}, but the file has ${lines} lines`,
-					`citations: docs/operations/viewer.md:${viewer + 2} cites src/run.ts:${lines + 5}, but the file has ${lines} lines`,
+					`citations: docs/operations/viewer.md:${viewer + 2} cites src/core/run.ts:${lines + 1}, but the file has ${lines} lines`,
+					`citations: docs/operations/viewer.md:${viewer + 2} cites src/core/run.ts:${lines + 5}, but the file has ${lines} lines`,
 					`citations: docs/operations/viewer.md:${viewer + 4} cites src/gone.ts:0, which is not a valid citation`,
 				].sort(),
 			);

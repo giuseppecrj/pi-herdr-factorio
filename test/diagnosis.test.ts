@@ -38,7 +38,7 @@ import {
 	type HeldoutReplay,
 	type TreeReplay,
 } from "../src/diagnosis.ts";
-import { digestOf } from "../src/run.ts";
+import { digestOf } from "../src/core/run.ts";
 import {
 	contractBytes,
 	contractDigestOf,
@@ -53,7 +53,7 @@ import {
 	parseJson,
 	type JsonObject,
 	type JsonValue,
-} from "../server/sandbox/json.ts";
+} from "../src/core/json.ts";
 import {
 	checkCandidate,
 	exportTree,

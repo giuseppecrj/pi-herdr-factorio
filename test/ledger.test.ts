@@ -30,9 +30,9 @@ import {
 	type LedgerRowV1,
 	type LedgerRowV2,
 } from "../src/ledger.ts";
-import { digestOf, runIdOf } from "../src/run.ts";
-import { unknownEfficiency } from "../server/sandbox/result.ts";
-import { objectOf } from "../server/sandbox/json.ts";
+import { digestOf, runIdOf } from "../src/core/run.ts";
+import { unknownEfficiency } from "../src/core/execution.ts";
+import { objectOf } from "../src/core/json.ts";
 import { isGitSha, isRepoSlug, type GitSha } from "../src/workflow.ts";
 import { LedgerGit, repo } from "./ledger-git.ts";
 import { TRUSTED_RUN_CAP } from "./fake-ticket-adapter.ts";

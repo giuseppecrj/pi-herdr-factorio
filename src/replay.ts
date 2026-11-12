@@ -7,7 +7,7 @@ import {
 } from "node:fs/promises";
 import { manifestDigest } from "../server/sandbox/manifest.ts";
 import { join } from "node:path";
-import { digestOf } from "./run.ts";
+import { digestOf } from "./core/run.ts";
 import { parseLedger, type LedgerRow } from "./ledger.ts";
 import {
 	currentRepository,
@@ -26,7 +26,7 @@ import {
 	parseJson,
 	textOf,
 	textsOf,
-} from "../server/sandbox/json.ts";
+} from "./core/json.ts";
 
 export const REPLAY_RUN_CAP = 540_000;
 export const REPLAY_CORPUS = "test/fixtures/replay";
@@ -913,29 +913,48 @@ export async function voidReplay(
 	await saveBudget(path, budget);
 }
 
+/**
+ * Where each stage cap is declared, oldest layout first. A revision must
+ * declare each cap in exactly one of its files; none or several refuses.
+ */
+const STAGE_CAP_DECLARATIONS = [
+	["accept", "ACCEPTANCE_MAX_TOKENS", "src/accept.ts"],
+	["build", "BUILD_MAX_TOKENS", "src/build.ts"],
+	["review", "REVIEW_MAX_TOKENS", "src/run.ts", "src/core/run.ts"],
+	["repair", "REPAIR_BUILD_MAX_TOKENS", "src/run.ts", "src/core/run.ts"],
+] as const;
+
 export async function replayStageCaps(
 	sha: string,
 	exec: Exec,
 ): Promise<Record<string, number>> {
 	const result: Record<string, number> = {};
 
-	for (const [key, file, name] of [
-		["accept", "src/accept.ts", "ACCEPTANCE_MAX_TOKENS"],
-		["build", "src/build.ts", "BUILD_MAX_TOKENS"],
-		["review", "src/run.ts", "REVIEW_MAX_TOKENS"],
-		["repair", "src/run.ts", "REPAIR_BUILD_MAX_TOKENS"],
-	]) {
-		const source = await exec("git", ["show", `${sha}:${file}`]);
+	for (const [key, name, ...files] of STAGE_CAP_DECLARATIONS) {
+		const values: number[] = [];
 
-		const match = new RegExp(`export const ${name} = ([0-9_]+);`).exec(
-			source.stdout,
-		);
+		for (const file of files) {
+			const source = await exec("git", ["show", `${sha}:${file}`]);
 
-		const value = Number(match?.[1]?.replaceAll("_", ""));
+			if (source.code !== 0) continue;
 
-		if (source.code !== 0 || !Number.isSafeInteger(value) || value <= 0)
+			const match = new RegExp(`export const ${name} = ([0-9_]+);`).exec(
+				source.stdout,
+			);
+
+			if (match !== null) values.push(Number(match[1]?.replaceAll("_", "")));
+		}
+
+		const [value] = values;
+
+		if (
+			values.length !== 1 ||
+			value === undefined ||
+			!Number.isSafeInteger(value) ||
+			value <= 0
+		)
 			refuse("replay_stage_caps_unavailable");
-		result[required(key ?? null)] = value;
+		result[key] = value;
 	}
 
 	return result;

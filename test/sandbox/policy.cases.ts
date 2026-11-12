@@ -14,7 +14,7 @@ import type {
 	RouteId,
 	RouteTable,
 } from "../../server/sandbox/routes.ts";
-import type { JsonValue } from "../../src/tickets.ts";
+import type { JsonValue } from "../../src/core/json.ts";
 import { modelTable } from "./routes.cases.ts";
 
 const HOST = "127.0.0.1:18080";

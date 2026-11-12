@@ -30,7 +30,7 @@ import {
 	readLedgerCommit,
 	readLedgerFile,
 } from "../src/publication.ts";
-import { digestOf, REQUIRED_CI_CHECKS } from "../src/run.ts";
+import { digestOf, REQUIRED_CI_CHECKS } from "../src/core/run.ts";
 import { type Exec, type ExecResult } from "../src/gh.ts";
 import {
 	fieldOf,
@@ -39,7 +39,7 @@ import {
 	textOf,
 	arrayOf,
 	type JsonValue,
-} from "../server/sandbox/json.ts";
+} from "../src/core/json.ts";
 import { isGitSha, isRepoSlug, type GitSha } from "../src/workflow.ts";
 import {
 	type Contract,

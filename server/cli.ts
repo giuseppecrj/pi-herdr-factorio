@@ -35,7 +35,7 @@ import {
 	type StageExecutor,
 	type TickReport,
 } from "../src/orchestrator.ts";
-import type { JsonValue } from "../src/tickets.ts";
+import type { JsonValue } from "../src/core/json.ts";
 import {
 	type CheckReport,
 	checkReport,
@@ -93,9 +93,9 @@ import {
 	objectOf,
 	parseJson,
 	textOf,
-} from "./sandbox/json.ts";
+} from "../src/core/json.ts";
 import { parseLedger, ledgerApiOf } from "../src/ledger.ts";
-import { digestOf, isDigest } from "../src/run.ts";
+import { digestOf, isDigest } from "../src/core/run.ts";
 import {
 	computeMetrics,
 	measurementPrimary,

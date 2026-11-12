@@ -5,7 +5,7 @@ import {
 	anthropicMaxOutput,
 	isAnthropicModelId,
 	parseAnthropicModel,
-} from "../../server/sandbox/anthropic-limits.ts";
+} from "../../src/core/models.ts";
 import {
 	BUILTIN_HOSTS,
 	builtinTable,
@@ -13,7 +13,7 @@ import {
 	parseRouteTable,
 	type RouteTable,
 } from "../../server/sandbox/routes.ts";
-import type { JsonValue } from "../../src/tickets.ts";
+import type { JsonValue } from "../../src/core/json.ts";
 import { EXE_DEV_PLATFORM } from "../../src/platform.ts";
 
 export function modelTable(

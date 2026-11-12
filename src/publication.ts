@@ -21,7 +21,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ghFailure, type Exec, type ExecResult } from "./gh.ts";
 import { type ControllerIdentity, EXE_DEV_PLATFORM } from "./platform.ts";
-import { digestOf, type Digest } from "./run.ts";
+import { digestOf, type Digest } from "./core/run.ts";
 import { isGitSha, type GitSha, type RepoSlug } from "./workflow.ts";
 import {
 	arrayOf,
@@ -30,7 +30,7 @@ import {
 	parseJson,
 	textOf,
 	type JsonValue,
-} from "../server/sandbox/json.ts";
+} from "./core/json.ts";
 
 /** The exe-dev commit email, kept for test imports. Commits use the API's identity. */
 export const BOT_EMAIL = EXE_DEV_PLATFORM.botEmail;

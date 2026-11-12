@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { journalCharge } from "../../server/sandbox/audit.ts";
-import { familyFromJournal, type FamilyInput } from "../../src/review.ts";
+import { journalCharge } from "../../src/core/journal.ts";
+import { familyFromJournal, type FamilyInput } from "../../src/core/models.ts";
 import {
 	isAnthropicModelId,
 	parseAnthropicModel,
-} from "../../server/sandbox/anthropic-limits.ts";
+} from "../../src/core/models.ts";
 import {
 	countOf,
 	fieldOf,
@@ -12,7 +12,7 @@ import {
 	parseJson,
 	textOf,
 	type JsonValue,
-} from "../../server/sandbox/json.ts";
+} from "../../src/core/json.ts";
 
 // Frozen f9965fc readers are the parity oracle, not the new projection.
 export function legacyCharge(text: string) {

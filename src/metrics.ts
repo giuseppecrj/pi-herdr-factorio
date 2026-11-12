@@ -1,13 +1,13 @@
 import { lstat, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { parseLedger, type LedgerRow, type RunContextV2 } from "./ledger.ts";
-import { digestOf } from "./run.ts";
+import { digestOf } from "./core/run.ts";
 import {
 	type HistoricalRepositories,
 	measuredRepositories,
 } from "./platform.ts";
 import { regularText } from "./artifacts.ts";
-import type { JsonValue } from "./tickets.ts";
+import type { JsonValue } from "./core/json.ts";
 
 function metricObject(value: JsonValue | undefined) {
 	return value !== undefined &&

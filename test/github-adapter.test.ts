@@ -10,7 +10,8 @@ import {
 	type Login,
 } from "../src/adapters/github.ts";
 import { READY_LABEL } from "../src/policy.ts";
-import { type JsonValue, ticketKey } from "../src/tickets.ts";
+import { type JsonValue } from "../src/core/json.ts";
+import { ticketKey } from "../src/tickets.ts";
 import { type Exec, isRepoSlug, type RepoSlug } from "../src/workflow.ts";
 import {
 	BOT_LOGIN,

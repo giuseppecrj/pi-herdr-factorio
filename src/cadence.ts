@@ -20,10 +20,10 @@ import {
 	parseJson,
 	textOf,
 	type JsonValue,
-} from "../server/sandbox/json.ts";
+} from "./core/json.ts";
 import { primaryMetricText, type measurementPrimary } from "./metrics.ts";
 import { cadenceMarker } from "./markers.ts";
-import { digestOf, isDigest, type Digest } from "./run.ts";
+import { digestOf, isDigest, type Digest } from "./core/run.ts";
 import { inert } from "./specify.ts";
 import type { ScoreEvent } from "./ledger.ts";
 import {

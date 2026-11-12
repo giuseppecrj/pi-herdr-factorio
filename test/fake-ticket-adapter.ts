@@ -5,15 +5,15 @@ import {
 	type PermissionLevel,
 	READY_LABEL,
 } from "../src/policy.ts";
-import type { Run, TicketRef } from "../src/run.ts";
+import type { Run, TicketRef } from "../src/core/run.ts";
 import {
 	type FactoryEvent,
-	type JsonValue,
 	type Ticket,
 	type TicketAdapter,
 	type TicketState,
 	ticketKey,
 } from "../src/tickets.ts";
+import { type JsonValue } from "../src/core/json.ts";
 import type { Exec, ExecResult } from "../src/workflow.ts";
 
 export type Call =

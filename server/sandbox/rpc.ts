@@ -9,7 +9,7 @@ import {
 	parseJson,
 	textOf,
 	arrayOf,
-} from "./json.ts";
+} from "../../src/core/json.ts";
 
 export type PiUsage = { readonly totalTokens: number };
 
