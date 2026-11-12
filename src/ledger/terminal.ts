@@ -1,10 +1,7 @@
 import { isDigest, type Digest } from "../core/run.ts";
 import { unknownEfficiency, type EfficiencyFacts } from "../core/execution.ts";
-import {
-	authoredOf,
-	candidateGenerations,
-	type CandidateState,
-} from "../handoff.ts";
+import type { CandidateState } from "../candidate/state.ts";
+import { authoredOf, candidateGenerations } from "../candidate/handoff.ts";
 import {
 	VISIBLE_CHECKS,
 	failedVisibleChecks,

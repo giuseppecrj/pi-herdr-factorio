@@ -14,7 +14,7 @@ import {
 	RUN_STATUSES,
 } from "../src/trust/markers.ts";
 import { digestOf, runIdOf } from "../src/core/run.ts";
-import type { HandoffReason } from "../src/handoff.ts";
+import type { HandoffReason } from "../src/candidate/state.ts";
 import type { JsonValue } from "../src/core/json.ts";
 import {
 	type GitSha,

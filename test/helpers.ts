@@ -38,16 +38,18 @@ import {
 } from "../src/candidate/diagnosis.ts";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import type {
+	AdmissionPin,
+	CandidateState,
+	ReviewExecution,
+} from "../src/candidate/state.ts";
+import { parseCandidateState } from "../src/candidate/codec.ts";
 import {
 	beginCandidate,
 	candidateGenerations,
 	handoffCandidate,
-	parseCandidateState,
-	type AdmissionPin,
 	type CandidateEvent,
-	type CandidateState,
-	type ReviewExecution,
-} from "../src/handoff.ts";
+} from "../src/candidate/handoff.ts";
 import { candidateBranch } from "../src/github/publish.ts";
 import {
 	assessmentBinding,

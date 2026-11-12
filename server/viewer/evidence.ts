@@ -34,14 +34,18 @@ import {
 	candidateGenerations,
 	candidateProjection,
 	candidateUsage,
+} from "../../src/candidate/handoff.ts";
+import {
 	migrateCertificationValue,
 	migrateEvidenceValue,
 	parseReviewReceipt,
-	type GenerationEvidence,
-	type GenerationIntent,
-	type Certification,
-	type CandidateExecution,
-} from "../../src/handoff.ts";
+} from "../../src/candidate/codec.ts";
+import type {
+	GenerationEvidence,
+	GenerationIntent,
+	Certification,
+	CandidateExecution,
+} from "../../src/candidate/state.ts";
 import { reviewDir, type ReviewReceipt } from "../../src/candidate/review.ts";
 import { blocksReview, type Verdict } from "../../src/core/run.ts";
 

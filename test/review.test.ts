@@ -41,11 +41,11 @@ import {
 	storedAssessment,
 } from "./helpers.ts";
 import { feedbackBytes, validationDir } from "../src/candidate/validation.ts";
+import { parseReviewReceipt } from "../src/candidate/codec.ts";
 import {
-	parseReviewReceipt,
 	reviewReceiptDigest,
 	type RepairCause,
-} from "../src/handoff.ts";
+} from "../src/candidate/state.ts";
 import { digestOf } from "../src/core/run.ts";
 import {
 	mkdtempSync,

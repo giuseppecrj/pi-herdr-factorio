@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { STAGE_ORDER, type Stage } from "../src/core/stages.ts";
-import { candidateUsage, candidateProjection } from "../src/handoff.ts";
+import {
+	candidateUsage,
+	candidateProjection,
+} from "../src/candidate/handoff.ts";
 import {
 	advance,
 	formatStageTable,

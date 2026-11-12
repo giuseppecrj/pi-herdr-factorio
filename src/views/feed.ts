@@ -8,14 +8,14 @@ import {
 	type AttentionThresholds,
 } from "./attention.ts";
 import { fileAdmissionStore } from "../trust/admission.ts";
+import { parseCandidateState } from "../candidate/codec.ts";
 import {
-	parseCandidateState,
 	candidateProjection,
 	candidateUsage,
 	candidateGenerations,
 	notProven,
 	renderLimitation,
-} from "../handoff.ts";
+} from "../candidate/handoff.ts";
 import { fileArtifacts, readStoredContract } from "../contract/artifacts.ts";
 import { familyClaimsHold, reviewR8 } from "../candidate/review.ts";
 import { frozenRowOf, parseRunStart, isKnownCap } from "../ledger/schema.ts";

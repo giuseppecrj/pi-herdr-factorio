@@ -4,7 +4,7 @@ import type {
 	OwnerHeader,
 	DisplayGroup,
 } from "../../src/views/feed.ts";
-import type { HandoffReason } from "../../src/handoff.ts";
+import type { HandoffReason } from "../../src/candidate/state.ts";
 import { STAGE_ORDER } from "../../src/core/stages.ts";
 import { escapeHtml as esc, page } from "./render.ts";
 import { icons } from "./design/icons/icons.ts";

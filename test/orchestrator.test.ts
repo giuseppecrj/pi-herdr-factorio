@@ -146,9 +146,9 @@ import {
 	candidateUsage,
 	promotedHead,
 	handoffCandidate,
-	parseCandidateState,
-	type CandidateState,
-} from "../src/handoff.ts";
+} from "../src/candidate/handoff.ts";
+import { parseCandidateState } from "../src/candidate/codec.ts";
+import type { CandidateState } from "../src/candidate/state.ts";
 import type { Run } from "../src/core/run.ts";
 import {
 	blocksReview,
@@ -778,7 +778,7 @@ class FakeExecutor implements StageExecutor {
 		stage: string;
 		attempt: number;
 		round?: number;
-		execution?: import("../src/handoff.ts").CandidateExecution;
+		execution?: import("../src/candidate/state.ts").CandidateExecution;
 	}): Promise<number | null> {
 		if (input.execution !== undefined)
 			return (

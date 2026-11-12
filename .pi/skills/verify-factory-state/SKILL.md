@@ -15,7 +15,7 @@ The last recorded runtime correspondence revision is `3c62fc7`. Do not treat the
 
 | Runtime owner | Model responsibility |
 | --- | --- |
-| `src/handoff.ts` | Candidate generations, execution accounts, certification, feedback repair, owner-head recertification, stop, and finish |
+| `src/candidate/state.ts`, `src/candidate/codec.ts`, `src/candidate/handoff.ts` | Candidate generations, execution accounts, certification, feedback repair, owner-head recertification, stop, and finish. `state.ts` holds the book shape and generation identity, `codec.ts` the stored-book decoding, `handoff.ts` the policy |
 | `src/candidate/stages.ts` | Public `advance` delegates candidate policy to `handoffCandidate` |
 | `src/orchestrator.ts` | Persisted intent, effect interpretation, captured callback, and restart recovery |
 | `src/github/publish.ts`, `server/controller.ts` | Publication, non-force promotion, CI deadlines, and owned ref cleanup |

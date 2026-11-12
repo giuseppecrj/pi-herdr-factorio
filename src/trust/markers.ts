@@ -1,5 +1,5 @@
 import type { CommentEdit, IssueComment } from "../github/adapter.ts";
-import type { HandoffReason } from "../handoff.ts";
+import type { HandoffReason } from "../candidate/state.ts";
 import { type ControllerIdentity, EXE_DEV_PLATFORM } from "./platform.ts";
 import { type Digest, isDigest, runIdOf } from "../core/run.ts";
 import { isStage, type Stage } from "../core/stages.ts";

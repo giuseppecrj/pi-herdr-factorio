@@ -39,7 +39,7 @@ import {
 	candidateUsage,
 	candidateProjection,
 	handoffCandidate,
-} from "../src/handoff.ts";
+} from "../src/candidate/handoff.ts";
 import { keepReview } from "../src/candidate/review.ts";
 import { validationDir } from "../src/candidate/validation.ts";
 import { viewerClaim } from "../server/viewer/claim.ts";

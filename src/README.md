@@ -38,7 +38,7 @@ L06 moved the intact modules into their owner folders. Files marked pending stay
 | `src/config` | Not created | `src/workflow.ts` in L08 |
 | `src/github` | `adapter.ts`, `exec.ts`, `tickets.ts`, `publish.ts` | None |
 | `src/contract` | `acceptance.ts`, `artifacts.ts` | `src/specify.ts` in L08 |
-| `src/candidate` | `build.ts`, `review.ts`, `validation.ts`, `feedback.ts`, `diagnosis.ts`, `stages.ts` | `src/handoff.ts` in L07 |
+| `src/candidate` | `state.ts`, `codec.ts`, `handoff.ts`, `build.ts`, `review.ts`, `validation.ts`, `feedback.ts`, `diagnosis.ts`, `stages.ts` | None |
 | `src/ledger` | `schema.ts`, `git.ts`, `append.ts`, `terminal.ts`, `outbox.ts` | None |
 | `src/controller` | Not created | `src/orchestrator.ts` in L10 |
 | `src/views` | `feed.ts`, `attention.ts`, `explain.ts`, `metrics.ts` | None |

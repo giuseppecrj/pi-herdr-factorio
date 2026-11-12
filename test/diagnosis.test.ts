@@ -92,7 +92,7 @@ import {
 	readPatch,
 	storePatch,
 } from "../src/candidate/build.ts";
-import { generationIntent } from "../src/handoff.ts";
+import { generationIntent } from "../src/candidate/state.ts";
 import { candidateBranch } from "../src/github/publish.ts";
 import { CONTROLLER_LOGIN } from "../src/trust/markers.ts";
 import type { Exec } from "../src/github/exec.ts";

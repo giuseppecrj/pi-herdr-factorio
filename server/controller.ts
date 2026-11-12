@@ -83,20 +83,24 @@ import {
 import {
 	promotedHead,
 	handoffGeneration,
-	sameGeneration,
-	type GenerationRef,
-	parseCandidateState,
 	candidateUsage,
 	candidateGenerations,
 	completingFeedbackBatch,
-	ownerPatchValid,
-	migrateCertificationValue,
-	migrateEvidenceValue,
 	notProven,
 	renderLimitation,
-	type CandidateState,
 	type CandidateEvent,
-} from "../src/handoff.ts";
+} from "../src/candidate/handoff.ts";
+import {
+	sameGeneration,
+	type GenerationRef,
+	ownerPatchValid,
+	type CandidateState,
+} from "../src/candidate/state.ts";
+import {
+	parseCandidateState,
+	migrateCertificationValue,
+	migrateEvidenceValue,
+} from "../src/candidate/codec.ts";
 import {
 	GitHubTicketAdapter,
 	GitHubTicketWriter,

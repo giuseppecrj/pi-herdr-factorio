@@ -157,7 +157,7 @@ export type ValidationInput = {
 	readonly now: number;
 	readonly wallMs: number;
 	readonly round?: number;
-	readonly generation?: import("../handoff.ts").GenerationIntent;
+	readonly generation?: import("./state.ts").GenerationIntent;
 	readonly state: ValidationState | null;
 	readonly save: (state: ValidationState) => Promise<boolean>;
 	readonly dispatchAllowed?: boolean;

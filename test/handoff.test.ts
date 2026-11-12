@@ -10,28 +10,32 @@ import { test } from "node:test";
 import {
 	beginCandidate,
 	authoredOf,
-	type OwnerPatchReceipt,
 	stopRound,
 	candidateUsage,
 	handoffCandidate as reduceCandidate,
 	candidateProjection,
-	generationIntent,
-	type AdmissionPin,
 	type CandidateEvent,
 	promotedHead,
-	type CandidateState,
-	type CandidateEffect,
-	type ReviewExecution,
 	candidateAllowance,
 	certifyGeneration,
 	notProven,
-	parseCandidateState,
+	renderLimitation,
+} from "../src/candidate/handoff.ts";
+import {
+	type OwnerPatchReceipt,
+	generationIntent,
+	type AdmissionPin,
+	type CandidateState,
+	type CandidateEffect,
+	type ReviewExecution,
 	reviewReceiptDigest,
+} from "../src/candidate/state.ts";
+import {
+	parseCandidateState,
 	parseReviewReceipt,
 	parseOwnerPatchReceipt,
-	renderLimitation,
 	migrateCertificationValue,
-} from "../src/handoff.ts";
+} from "../src/candidate/codec.ts";
 import {
 	digestOf,
 	REPAIR_BUILD_MAX_TOKENS,
@@ -7383,8 +7387,8 @@ for (const [pinned, via] of [
 	});
 
 const BOOK_MODULES = {
-	codec: new URL("../src/handoff.ts", import.meta.url).href,
-	policy: new URL("../src/handoff.ts", import.meta.url).href,
+	codec: new URL("../src/candidate/codec.ts", import.meta.url).href,
+	policy: new URL("../src/candidate/handoff.ts", import.meta.url).href,
 };
 
 type BookCase = Readonly<{
