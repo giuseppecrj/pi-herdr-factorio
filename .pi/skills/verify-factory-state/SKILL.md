@@ -44,7 +44,7 @@ Record the exact HEAD/tree, Node version, checker version/hash, commands, exits,
 | `controller/Controller.tla` | `498fe16f509c1b8bb23e1988c056bb49414e877f703993c81538ae4a0b65a5a6` |
 | `controller/Chart.cfg` | `aedbc63300b06b9f1a4650efad5bb8c1794343fcc307d77d2c44106993fd8f0f` |
 
-Use `sha256sum docs/statecharts/journey/*.tla docs/statecharts/journey/*.cfg docs/statecharts/controller/*.tla docs/statecharts/controller/*.cfg` for the current inventory. Record the F4 runner hash too. A hash mismatch invalidates unchanged-model evidence until reviewed. Never reduce a bound to obtain a pass.
+Use `sha256sum docs/statecharts/journey/*.tla docs/statecharts/journey/*.cfg docs/statecharts/controller/*.tla docs/statecharts/controller/*.cfg` for the current inventory. `controller/Controller.cfg` belongs to the historical F09a row in the README, with hash `ddc0cae91effbed82a890574c14f24b6af9abd5822532ea29465fb746b326bae`. It is not an F10 qualification file. Record the F4 runner hash too. A hash mismatch invalidates unchanged-model evidence until reviewed. Never reduce a bound to obtain a pass.
 
 ## Run the existing checks
 

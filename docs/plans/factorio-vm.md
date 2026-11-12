@@ -707,7 +707,7 @@ For orchestration v1, use Shep's fixed-profile pi session with only factory exte
 
 ## Appendix D. Links and reading list
 
-- Read the supplied host facts and Amendment 1 at `/home/g/Projects/pi-herdr-factorio-trails/ms-a2-vm/facts.md` before VM2. Keep their host observations and shared-user design. Use this plan's later owner sequence and current main instead of the stale production and provisioning statements.
+- Read the supplied host facts and Amendment 1 at `ms-a2-vm/facts.md` in the private trails checkout (`../pi-herdr-factorio-trails/`) before VM2. Keep their host observations and shared-user design. Use this plan's later owner sequence and current main instead of the stale production and provisioning statements.
 - Read `nublai/root`'s `.pi/plan/research/orchestration.md` for the coordinator's orchestration v1 decision. Track [#738](https://github.com/nublai/pi-herdr-factorio/issues/738) for bot refusal and creation-time labels, [#739](https://github.com/nublai/pi-herdr-factorio/issues/739) for intake references and multi-repo feed reads, and [#740](https://github.com/nublai/pi-herdr-factorio/issues/740) for the v1.1 questions link.
 - Read `docs/plans/factory-v1.md`, `docs/decisions.tsv`, and `docs/plans/exmach-move.md` for program limits, authority history, and the reusable MV work. This plan does not resume the parked exmach program.
 - Read `docs/operations/install-exe-dev.md`, `docs/operations/platform.md`, `docs/operations/sandbox.md`, `docs/operations/owner-feed.md`, `docs/operations/backup.md`, and `.pi/skills/verify-factory/SKILL.md` before changing their contracts. Check active repository and history behavior against `src/platform.ts`, and reviewer selection against `.github/factory/WORKFLOW.md`.

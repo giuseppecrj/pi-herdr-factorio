@@ -12,7 +12,7 @@ The factory is a Pi package plus a controller. Drive these interfaces only under
 - the VM, over ssh as `exedev`;
 - GitHub, through repository-scoped `gh`, with the target's `GH_HOST` only in the trusted VM environment, never locally;
 - the `/factory status` and `/factory run <issue>` extension commands;
-- the factory CLI, `node --experimental-strip-types server/cli.ts`, documented in `docs/operations/factory-cli.md`.
+- the factory CLI, `node server/cli.ts`, documented in `docs/operations/factory-cli.md`.
 
 Use [verify-factory-state](../verify-factory-state/SKILL.md) for the existing bounded formal checks and runtime correspondence replay. Source-only prose work needs no VM drive.
 
@@ -24,7 +24,7 @@ Read `.pi/skills/verify-factory/features/README.md` for the feature map and the 
 
 At this checkout, `vm.sh` and `lane-setup.sh` source `target.sh`, which reads `FACTORY_VM` and `targets.env`. Inspect those files before use. `FACTORY_VM` defaults to the retiring `pi-factorio`, so never omit it. The configured `nubl-factory` entry is not proof of an installation or authority to connect. `factorio` remains unconfigured.
 
-The Arm receipt reported hardcoded SSH routing that ignored `FACTORY_VM`. That observation does not describe the scripts at the L01 base `3bcd19f`, which already select a target. L01 changes no script and adds no disposable-target support. L02 must reconcile the maintained drivers with the layout program before any lane uses them. Do not infer a safe target from an environment variable alone.
+The Arm receipt reported hardcoded SSH routing in the old VM checkout `349934b`, which ignored `FACTORY_VM`. That observation does not describe this branch or the L01 base `3bcd19f`, whose scripts already select a target through `target.sh`. L01 changes no script and adds no disposable-target support. L02 must reconcile the maintained drivers with the layout program before any lane uses them. Do not infer a safe target from an environment variable alone.
 
 For an explicitly authorized retiring-host read only:
 

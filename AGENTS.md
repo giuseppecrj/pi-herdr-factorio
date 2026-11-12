@@ -5,26 +5,27 @@ This repository builds a GitHub-first software factory. Authorized issues pass t
 ## Start here
 
 1. Read `docs/plans/codebase-layout.md` for the active L00 to L15 program under poteto-mode's `autopilot-stack` playbook. Read `docs/plans/factory-v1.md` for the factory program's historical state and remaining evidence gaps. Use `git log` to confirm what landed.
-2. Read `docs/decisions.tsv` for decisions, grants, and verdicts. Only the coordinator appends rows, using the installed pstack `show-me-your-work` skill's `log.sh`. Preserve every historical row.
-3. Read the latest `.pi/daily-log/` file and coordinator handoff in the private `pi-herdr-factorio-trails/` directory, when present. The coordinator supplies its location. `docs/handoff.md` is historical evidence, not authority.
+2. Read `docs/decisions.tsv` for decisions, grants, and verdicts. Only the coordinator appends rows, using the installed pstack `show-me-your-work` skill's `log.sh`. Preserve every historical row. New rows ship with the next docs PR. A grant covers only the scope its row names. Later rows can narrow or withdraw it.
+3. Read the latest `.pi/daily-log/` file in this repo, when present. The coordinator handoff is the newest `RESUME-*.md` in the private trails checkout, `../pi-herdr-factorio-trails/` beside the root checkout. It lists the grants in force. `docs/handoff.md` is historical evidence, not authority.
 
-One session coordinates the program. A delegated leaf follows its bounded brief and launches no children. If coordination ownership is unclear, ask the owner before acting. Resolve `<pstack>` from the installed skill inventory, not a workstation path.
+One session coordinates the program. Children follow their bounded briefs and are leaves unless their brief allows delegation. If coordination ownership is unclear, ask the owner before acting. Resolve `<pstack>` from the installed skill inventory, not a workstation path.
 
 ## Authority and delivery
 
-- No plan grants execution. Obtain the owner's current grant for external actions. No merges, dispatch, deployments, settings changes, or cleanup follow from general autonomy. L00 to L15 stop at STACK-READY for owner landing. Historical grants are not standing permission.
-- `pi-factorio` is retiring under #712 and #734. Do not deploy there. The layout program permits reads only at Arm and L15. `nubl-factory` stays empty until the program lands and the owner installs it fresh and held. Later host plans remain parked.
+- No plan grants execution. Obtain the owner's current grant for external actions. No merges, dispatch, deployments, settings changes, or cleanup follow from general autonomy. L00 to L15 stop at STACK-READY for owner landing. Historical grants are not standing permission. Reconcile a standing owner grant with a child's narrower task scope before declaring a project-wide permission blocker or asking again.
+- For merges granted outside a plan, use `gh pr merge --squash --match-head-commit <sha>` after a verdict comment, green exact-head `check`, and clean `git merge-tree`. Cleanup needs its own grant.
+- `pi-factorio` is retiring under #712 and #734. Do not deploy there. The layout program limits `pi-factorio` reads to Arm and L15, each under a VM-read grant. `nubl-factory` stays empty until the program lands and the owner installs it fresh and held. The ms-a2 host plan is later. Only exmach is parked.
 - Use `.pi/skills/verify-factory/SKILL.md` for authorized CLI, extension, viewer, installer, and native checks. Use `.pi/skills/verify-factory-state/SKILL.md` for existing bounded formal checks. Recipes grant no VM or fixture action.
 - On exe.dev, GitHub uses `exe-dev-github-integration[bot]` and `GH_HOST=github.int.exe.xyz`. Never set `GH_HOST` locally. Only the owner creates or deletes `factory:enabled`.
-- Name fixture issues `[<PR>-w<n>-...]`. Close each under its grant and confirm CLOSED. Never run competing controllers over the same repository, even when one is held. Stage sandboxes use Pi's `--no-context-files`, so they do not load this file.
-- Preserve exact-head CI and review binding, captured execution identity, cumulative budgets, and owner edits. Test preparation, execution, persistence, fresh-process recovery, and handoff through real entry points. Synthetic local evidence is not live proof.
-- Cite each blocker's requirement or observed failure, risk, and next action. Diagnose the verifier before changing the product. Do not weaken assertions, stage allowances, or gates to make a check pass.
+- Name fixture issues `[<PR>-...]`. Close each under its grant and confirm CLOSED. Never run competing controllers over the same repository, even when one is held. Stage sandboxes use Pi's `--no-context-files`, so they do not load this file.
+- Preserve exact-head CI and review binding, captured execution identity, cumulative budgets, owner edits, and required live and performance checks. Test preparation, execution, persistence, fresh-process recovery, and handoff through real entry points. Synthetic local evidence is not live proof.
+- Cite each blocker's requirement or observed failure, risk, and next action. Diagnose the verifier before changing the product. Do not weaken assertions, stage allowances, or gates to make a check pass. Do not invent a stronger release gate while verifying the existing one.
 - Bound investigations before starting. A timeout is incomplete, not a pass or counterexample. Keep formal limits separate from delivery decisions and bootstrap readiness separate from deployment.
-- Use the active plan's walkthrough, one-writer, swarm, and convergence rules. Batch corrections. After the first fix round, block only for a user-hit bug, failed gate, or wrong shipped doc. Minor fixes get affected verification. Wording alone gets none. Reuse evidence only for unchanged covered code.
+- Use the active plan's walkthrough, one-writer, swarm, and convergence rules. Batch corrections. After the first fix round, block only for a user-hit bug, failed gate, or wrong shipped doc. A minor fix gets one affected verifier. A wording-only change gets none. File the rest in one follow-up. Reuse evidence only for unchanged covered code.
 
 ## Placement and checks
 
-Follow the folder READMEs rather than infer ownership from a filename. Root `README.md` routes to `src/README.md`, `server/README.md`, `test/README.md`, `docs/README.md`, `scripts/README.md`, and `.pi/skills/README.md`. Coordinator procedures belong in `.pi/skills/`. Sandbox stage prompts belong in `skills/`.
+Follow the folder READMEs rather than infer ownership from a filename. The root README routes to every folder README. Coordinator procedures belong in `.pi/skills/`. Sandbox stage prompts belong in `skills/`.
 
 | Changed path | Required checks |
 | --- | --- |
@@ -37,7 +38,7 @@ Follow the folder READMEs rather than infer ownership from a filename. Root `REA
 
 ## Rules learned the hard way
 
-- Never set an upstream on a branch made from `origin/main`. Create branches with `--no-track`. Push through the checked-push helper or an explicit `HEAD:refs/heads/<branch>`.
+- Never set an upstream on a branch made from `origin/main`. A bare `git push` then targets `main`. Create branches with `--no-track`. Push through `../pi-herdr-factorio-trails/bin/checked-push.sh` beside the root checkout or an explicit `HEAD:refs/heads/<branch>`.
 - Distrust child summaries. Inspect diffs, remote heads, CI, fixture state, and receipts. A child once said "no changes" over an almost complete draft.
 - Size lane token caps to full stage allowances, not expected spend. Specify, accept, and build reserve about 540,000 tokens together, about 40,000, 100,000, and 400,000 respectively. A smaller cap launches nothing.
 - Never narrow a stage below the plan's rule unless testing exhaustion. That tests the verifier, not the factory.
@@ -48,9 +49,9 @@ Follow the folder READMEs rather than infer ownership from a filename. Root `REA
 
 ## Models and spend
 
-- VM stages default to OpenAI through the owner's ChatGPT subscription and exe.dev's `llm` integration. The owner allowed Anthropic on 2026-11-02. F10c implemented it for accept and one blocking review seat, spending exe.dev credits. On 2026-11-06 the owner returned every stage to OpenAI. Keep that default unless the owner changes it. Other Anthropic stages need separate approval. xAI stays unused.
+- VM stages default to OpenAI through the owner's ChatGPT subscription and exe.dev's `llm` integration. The owner allowed Anthropic on 2026-11-02. F10c implemented it for accept and one blocking review seat, spending exe.dev credits. On 2026-11-06 the owner returned every stage to OpenAI. Keep that default unless the owner changes it. Any Anthropic stage, including the dormant F10c accept stage and review seat, needs the owner's approval. xAI stays unused.
 - Local independent reviewers must use a different provider and model family from the author. Review GPT-authored PRs with an authenticated Claude or Grok model. Report unavailable independence.
-- Raising a plan's token or time limit needs the owner. Record the raise before the performance probe.
+- Raising a plan's token or time limit needs the owner. Record the cap raise in the plan before the performance probe.
 
 ## Design
 

@@ -54,8 +54,11 @@ Require exit 0 and `installed=<C> held=yes`. Confirm the checkout's exact SHA, i
 Record the restart boundary and current service InvocationID. Inspect that invocation's journal for `event=controller_ready`. Require `status.json` and CLI `controller.lastTick.at` newer than the boundary, dispatch disabled, and `locally_disabled` among its reasons. The installer checks both fresh status reads before enabling boot. An old status file does not prove this start.
 
 ```bash
+export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
 GH_HOST=github.int.exe.xyz node /home/exedev/pi-herdr-factorio/server/cli.ts status \
   --json --repo "$REPO" --state-dir /home/exedev/factory-state
+invocation=$(systemctl show factory.service -p InvocationID --value)
+sudo journalctl -u factory.service "_SYSTEMD_INVOCATION_ID=$invocation" --no-pager -o cat
 systemctl show factory.service -p InvocationID -p MainPID -p NRestarts -p UnitFileState
 ```
 
