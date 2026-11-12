@@ -30,39 +30,36 @@ import {
 	type Route,
 	type RouteTable,
 } from "../server/sandbox/routes.ts";
+import { parseWorkflow } from "../src/config/parse.ts";
+import { type GitSha, isGitSha } from "../src/config/schema.ts";
+import type { JsonValue } from "../src/core/json.ts";
+import { digestOf, runIdOf } from "../src/core/run.ts";
 import type { CommentEdit, IssueComment } from "../src/github/adapter.ts";
 import { GitHubTicketAdapter } from "../src/github/adapter.ts";
+import type { Exec } from "../src/github/exec.ts";
+import { reserveReplay } from "../src/maintenance/replay.ts";
+import { checkIdentity, type TickReport } from "../src/orchestrator.ts";
 import {
 	formatMarker,
 	type Marker,
 	markerLedger,
 } from "../src/trust/markers.ts";
-import { checkIdentity, type TickReport } from "../src/orchestrator.ts";
 import {
 	currentRepository,
 	EXE_DEV_PLATFORM,
+	isRepoSlug,
 	measuredRepositories,
+	parsePlatformProfile,
+	platformDefect,
 	type PlatformFile,
 	type PlatformNetwork,
 	type PlatformProfile,
 	type PlatformRefusal,
-	parsePlatformProfile,
-	platformDefect,
 	platformSummary,
 	readPlatformFile,
+	type RepoSlug,
 	resolvePlatform,
 } from "../src/trust/platform.ts";
-import { reserveReplay } from "../src/maintenance/replay.ts";
-import { digestOf, runIdOf } from "../src/core/run.ts";
-import type { JsonValue } from "../src/core/json.ts";
-import {
-	type Exec,
-	type GitSha,
-	isGitSha,
-	isRepoSlug,
-	parseWorkflow,
-	type RepoSlug,
-} from "../src/workflow.ts";
 import { noPlatformFile } from "./helpers.ts";
 
 function slug(text: string): RepoSlug {

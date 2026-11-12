@@ -17,8 +17,8 @@ import {
 	type PublishedFile,
 	type TransportCounters,
 } from "../github/publish.ts";
-import type { Contract } from "../specify.ts";
-import { isGitSha, type GitSha } from "../workflow.ts";
+import type { Contract } from "../contract/contract.ts";
+import { isGitSha, type GitSha } from "../config/schema.ts";
 import {
 	arrayOf,
 	countOf,

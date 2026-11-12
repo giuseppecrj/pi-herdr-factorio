@@ -7,7 +7,7 @@ import {
 	isPinnedGrader,
 	type ScorerConfig,
 	type ModelId,
-} from "../workflow.ts";
+} from "../config/schema.ts";
 import {
 	latestScores,
 	parseScores,
@@ -25,7 +25,10 @@ export const FAMILY_NOTE = "context-isolated, same family, not cross-family";
 
 export const SCORER_FILES = [
 	"src/maintenance/scorers.ts",
-	"src/workflow.ts",
+	"src/config/schema.ts",
+	"src/config/parse.ts",
+	"src/config/load.ts",
+	"src/config/views.ts",
 	".github/factory/WORKFLOW.md",
 ] as const;
 

@@ -22,7 +22,8 @@ import {
 } from "../../src/core/json.ts";
 import { childUsageOf } from "../sandbox/settle.ts";
 import { isDigest, runIdOf } from "../../src/core/run.ts";
-import { isRepoSlug, isGitSha } from "../../src/workflow.ts";
+import { isGitSha } from "../../src/config/schema.ts";
+import { isRepoSlug } from "../../src/trust/platform.ts";
 import { isLogin } from "../../src/github/adapter.ts";
 import { parseMarker } from "../../src/trust/markers.ts";
 import {

@@ -74,7 +74,7 @@ import {
 	answersDigestOf,
 	type AnswersRecord,
 	type Link,
-} from "../src/specify.ts";
+} from "../src/contract/contract.ts";
 import type { Exec } from "../src/github/exec.ts";
 import {
 	formatMarker,
@@ -166,12 +166,8 @@ import {
 	REPAIR_BUILD_MAX_TOKENS,
 	REVIEW_MAX_TOKENS,
 } from "../src/core/run.ts";
-import {
-	type GitSha,
-	isGitSha,
-	isRepoSlug,
-	type RepoSlug,
-} from "../src/workflow.ts";
+import { type GitSha, isGitSha } from "../src/config/schema.ts";
+import { isRepoSlug, type RepoSlug } from "../src/trust/platform.ts";
 import {
 	FAKE_REPO,
 	FakeGitHub,

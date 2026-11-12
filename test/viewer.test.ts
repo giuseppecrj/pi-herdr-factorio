@@ -53,7 +53,9 @@ import {
 	parseMarker,
 	type Marker,
 } from "../src/trust/markers.ts";
-import { isRepoSlug, isGitSha, parseWorkflow } from "../src/workflow.ts";
+import { isGitSha } from "../src/config/schema.ts";
+import { parseWorkflow } from "../src/config/parse.ts";
+import { isRepoSlug } from "../src/trust/platform.ts";
 import fixture from "./fixtures/viewer/sessions.json" with { type: "json" };
 import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 import { noPlatformFile } from "./helpers.ts";

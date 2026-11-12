@@ -719,7 +719,7 @@ describe("layout guard", () => {
 				category: "TypeScript constants",
 				target: ".github/factory/WORKFLOW.md",
 				expect: [
-					/^literals: src\/workflow\.ts:\d+ names \.github\/factory\/WORKFLOW\.md, which does not exist/,
+					/^literals: src\/config\/schema\.ts:\d+ names \.github\/factory\/WORKFLOW\.md, which does not exist/,
 					/^literals: src\/maintenance\/cadence\.ts:\d+ names \.github\/factory\/WORKFLOW\.md, which does not exist/,
 					/^literals: src\/maintenance\/scorers\.ts:\d+ names \.github\/factory\/WORKFLOW\.md, which does not exist/,
 				],
@@ -741,7 +741,7 @@ describe("layout guard", () => {
 					"src/github/publish.ts",
 					"src/candidate/feedback.ts",
 					"src/candidate/validation.ts",
-					"src/specify.ts",
+					"src/contract/parse.ts",
 					"src/github/adapter.ts",
 					"server/sandbox.ts",
 					"server/gates.ts",

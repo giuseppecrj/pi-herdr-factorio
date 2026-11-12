@@ -91,7 +91,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Files.**
 
-- [ ] Create `src/workflow.ts`, `server/cli.ts`, `test/workflow.test.ts`, `.github/factory/WORKFLOW.md`, and `docs/operations/factory-cli.md`.
+- [ ] Create `src/config/{schema,parse,load,views}.ts`, `server/cli.ts`, `test/workflow.test.ts`, `.github/factory/WORKFLOW.md`, and `docs/operations/factory-cli.md`.
 - [ ] Edit `extension/index.ts`, `test/extension.test.ts`, `package.json`, `package-lock.json`, and `tsconfig.json` only for loader, CLI, parser dependency, and check coverage.
 
 **Build.**
@@ -253,7 +253,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Files.**
 
 - [ ] Create `server/sandbox.ts`, `server/sandbox/` (including the pinned `server/sandbox/assets/package.json` and `package-lock.json`), `test/sandbox.test.ts` and `test/sandbox/`, `docs/prototypes/vm-sandbox/`, and `docs/operations/sandbox.md`.
-- [ ] Edit `src/orchestrator.ts`, `src/trust/markers.ts`, `server/cli.ts`, `server/controller.ts`, `server/provision.sh`, `server/factory.service`, `src/candidate/stages.ts`, `src/workflow.ts`, `extension/index.ts` only if the profile table's API changes, their tests (`test/orchestrator.test.ts`, `test/markers.test.ts`, `test/stages.test.ts`, `test/workflow.test.ts`), `docs/operations/factory-cli.md`, `docs/design.md`, and this F05 section, for stage execution and truthful access profiles.
+- [ ] Edit `src/orchestrator.ts`, `src/trust/markers.ts`, `server/cli.ts`, `server/controller.ts`, `server/provision.sh`, `server/factory.service`, `src/candidate/stages.ts`, `src/config/{schema,parse,load,views}.ts`, `extension/index.ts` only if the profile table's API changes, their tests (`test/orchestrator.test.ts`, `test/markers.test.ts`, `test/stages.test.ts`, `test/workflow.test.ts`), `docs/operations/factory-cli.md`, `docs/design.md`, and this F05 section, for stage execution and truthful access profiles.
 
 **Build.**
 
@@ -308,7 +308,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 **Files.**
 
-- [ ] Create `src/specify.ts`, `test/specify.test.ts`, and `skills/audit-ticket/`, `skills/grill-me/`, `skills/deep-research/` with provenance files.
+- [ ] Create `src/contract/{contract,parse,render,prompt}.ts`, `test/specify.test.ts`, and `skills/audit-ticket/`, `skills/grill-me/`, `skills/deep-research/` with provenance files.
 - [ ] Edit `src/orchestrator.ts`, `src/trust/markers.ts`, `src/trust/admission.ts`, `src/github/tickets.ts`, `src/github/adapter.ts`, and `server/controller.ts` for stage inputs, outcomes, linked runs, and clarification reporting.
 - [ ] Edit `server/sandbox.ts`, `server/sandbox/rpc.ts`, `server/sandbox/result.ts`, and `server/provision.sh` for the stage prompt, tools, output capture, and bundled skills.
 - [ ] Edit `test/orchestrator.test.ts`, `test/markers.test.ts`, `test/sandbox/**`, `skills/README.md`, `docs/operations/sandbox.md`, `docs/operations/factory-cli.md`, and `.pi/skills/verify-factory/**`.
@@ -370,7 +370,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 - [ ] Create `src/contract/acceptance.ts`, `src/contract/artifacts.ts`, `test/accept.test.ts`, `test/artifacts.test.ts`, `skills/acceptance/`, and `docs/prototypes/acceptance-isolation/`.
 - [ ] Edit `server/controller.ts` and `skills/README.md` for acceptance-only artifact access. Edit `server/sandbox.ts` for the shared sandbox launch helper and recovery of acceptance's recorded model identity, with tests in `test/sandbox/**`. `server/provision.sh` needs no change, because the existing `skills/*/` loop bundles the new skill.
-- [ ] Edit `src/orchestrator.ts` for the specify-to-accept transition, accept inputs, storage, recovery and the summary, and `src/specify.ts` for the shared acceptance summary renderer and comment key. The owner's F06b brief widened the list to these.
+- [ ] Edit `src/orchestrator.ts` for the specify-to-accept transition, accept inputs, storage, recovery and the summary, and `src/contract/render.ts` for the shared acceptance summary renderer and comment key. The owner's F06b brief widened the list to these.
 - [ ] Edit `test/orchestrator.test.ts`, `docs/operations/sandbox.md`, `docs/operations/factory-cli.md`, `.pi/skills/verify-factory/**`, and this Files block in `docs/plans/factory-v1.md`.
 
 **Build.**
@@ -424,7 +424,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Files.**
 
 - [ ] Create `src/candidate/build.ts`, `test/build.test.ts`, `skills/build/`, `test/fixtures/build/`, and `docs/prototypes/build-isolation/`.
-- [ ] Edit `src/trust/policy.ts`, `test/policy.test.ts`, `server/controller.ts`, `server/sandbox.ts`, `skills/README.md`, `src/orchestrator.ts`, `src/specify.ts`, `src/contract/artifacts.ts`, `test/orchestrator.test.ts`, `test/sandbox/runner.cases.ts`, and `test/specify.test.ts` for patch collection, private records, summaries and stage wiring.
+- [ ] Edit `src/trust/policy.ts`, `test/policy.test.ts`, `server/controller.ts`, `server/sandbox.ts`, `skills/README.md`, `src/orchestrator.ts`, `src/contract/{contract,parse,render,prompt}.ts`, `src/contract/artifacts.ts`, `test/orchestrator.test.ts`, `test/sandbox/runner.cases.ts`, and `test/specify.test.ts` for patch collection, private records, summaries and stage wiring.
 - [ ] Edit `docs/operations/sandbox.md`, `docs/operations/factory-cli.md` and `.pi/skills/verify-factory/**` for the build boundary, two-tick verification and recovery protocol.
 
 **Build.**
@@ -479,7 +479,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 - [ ] Create `.github/workflows/ci.yml`, `.github/factory/gates/` including `scan.ts` and `scan-rules.json`, `server/gates.ts`, `test/candidate-gates.test.ts`, `test/fixtures/gate-cheating/`, `docs/prototypes/trusted-ci/` including `fix1-proof.json`, `fix1-perf.json` and `fix3-proof.json`, and `biome.json`. Edit `tsconfig.json` and `.oxlintrc.json` for the exact `test/acceptance/**` exclusion.
 - [ ] Edit `server/cli.ts`, `docs/operations/factory-cli.md`, and `docs/operations/sandbox.md` for the trusted-gates command and operator invocation. Edit `package.json` and `package-lock.json` only for required gate dependencies. Edit `.pi/skills/verify-factory/**` for verification instructions.
-- [ ] Edit `src/specify.ts`, `src/contract/artifacts.ts`, `src/candidate/build.ts`, `server/sandbox.ts`, and their tests (`test/specify.test.ts`, `test/artifacts.test.ts`, `test/build.test.ts`, `test/sandbox/**`) for exact contract-authorized test replacement, persistence, build input and visible-test exemptions. Edit this Files block to record the owner's F07b scope amendment.
+- [ ] Edit `src/contract/{contract,parse,render,prompt}.ts`, `src/contract/artifacts.ts`, `src/candidate/build.ts`, `server/sandbox.ts`, and their tests (`test/specify.test.ts`, `test/artifacts.test.ts`, `test/build.test.ts`, `test/sandbox/**`) for exact contract-authorized test replacement, persistence, build input and visible-test exemptions. Edit this Files block to record the owner's F07b scope amendment.
 
 **Build.**
 
@@ -534,7 +534,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Files.**
 
 - [ ] Create `src/candidate/validation.ts`, `src/publication.ts`, `test/validation.test.ts`, `test/publication.test.ts`, and `docs/prototypes/heldout-ci/`.
-- [ ] Edit `src/run.ts`, `src/candidate/stages.ts`, `src/trust/policy.ts`, `src/orchestrator.ts`, `src/trust/markers.ts`, `src/workflow.ts`, `src/candidate/build.ts`, `server/controller.ts`, `server/sandbox.ts`, and their tests for publication, recovery and exact-head CI evidence. Edit `test/helpers.ts`, `test/pipeline.test.ts`, `test/stages.test.ts`, and `test/policy.test.ts` for the bound pipeline.
+- [ ] Edit `src/run.ts`, `src/candidate/stages.ts`, `src/trust/policy.ts`, `src/orchestrator.ts`, `src/trust/markers.ts`, `src/config/{schema,parse,load,views}.ts`, `src/candidate/build.ts`, `server/controller.ts`, `server/sandbox.ts`, and their tests for publication, recovery and exact-head CI evidence. Edit `test/helpers.ts`, `test/pipeline.test.ts`, `test/stages.test.ts`, and `test/policy.test.ts` for the bound pipeline.
 - [ ] Edit `.github/factory/WORKFLOW.md` only for controller-only validate. Edit `docs/statecharts/**`, `docs/operations/sandbox.md`, `docs/operations/factory-cli.md`, `.pi/skills/verify-factory/**`, and this Files block for the F07c contracts. The held-out gate and static exclusions already landed in F07b.
 
 **Build.**
@@ -647,7 +647,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Files.**
 
 - [ ] Create `src/candidate/review.ts`, `test/review.test.ts` with inline fixtures, and `skills/code-review/`, `skills/security-review/`, `skills/simplify/`, `skills/ultrareview/` with provenance.
-- [ ] Edit `src/candidate/stages.ts`, `src/run.ts`, `src/orchestrator.ts`, `src/candidate/build.ts`, `src/candidate/validation.ts`, `src/workflow.ts`, `src/contract/artifacts.ts`, `src/trust/policy.ts`, `server/controller.ts`, `server/sandbox.ts`, and `server/sandbox/routes.ts` for review, round storage, repair and OpenAI fallback.
+- [ ] Edit `src/candidate/stages.ts`, `src/run.ts`, `src/orchestrator.ts`, `src/candidate/build.ts`, `src/candidate/validation.ts`, `src/config/{schema,parse,load,views}.ts`, `src/contract/artifacts.ts`, `src/trust/policy.ts`, `server/controller.ts`, `server/sandbox.ts`, and `server/sandbox/routes.ts` for review, round storage, repair and OpenAI fallback.
 - [ ] Edit `test/stages.test.ts`, `test/pipeline.test.ts`, `test/orchestrator.test.ts`, `test/build.test.ts`, `test/review.test.ts`, `test/workflow.test.ts`, `test/policy.test.ts`, `test/helpers.ts`, and `test/sandbox/runner.cases.ts` for bindings, shared caps, recovery and refusal tests.
 - [ ] Edit `server/viewer/claim.ts`, `server/viewer/evidence.ts`, `test/viewer.test.ts`, and `docs/operations/viewer.md` for round-aware evidence without compatibility aliases.
 - [ ] Edit `skills/README.md`, `.github/factory/WORKFLOW.md` (review only), `docs/statecharts/**`, `docs/operations/sandbox.md`, `docs/operations/factory-cli.md`, `.pi/skills/verify-factory/**`, and this Files block for the shipped contracts.
@@ -772,7 +772,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Files.**
 
 - [ ] Create `src/candidate/diagnosis.ts`, `test/base-check.test.ts`, `test/diagnosis.test.ts`, `test/fixtures/oracle-corpus/`, and `docs/prototypes/base-check/`.
-- [ ] Edit `src/specify.ts`, `src/contract/acceptance.ts`, `src/candidate/stages.ts`, `src/orchestrator.ts`, `server/gates.ts`, `server/controller.ts`, `skills/acceptance/SKILL.md`, `test/accept.test.ts`, `test/specify.test.ts`, `test/candidate-gates.test.ts`, and `test/orchestrator.test.ts` for scenario kinds, the base run, private failure details, failure classes, and their receipts.
+- [ ] Edit `src/contract/{contract,parse,render,prompt}.ts`, `src/contract/acceptance.ts`, `src/candidate/stages.ts`, `src/orchestrator.ts`, `server/gates.ts`, `server/controller.ts`, `skills/acceptance/SKILL.md`, `test/accept.test.ts`, `test/specify.test.ts`, `test/candidate-gates.test.ts`, and `test/orchestrator.test.ts` for scenario kinds, the base run, private failure details, failure classes, and their receipts.
 - [ ] Edit `src/candidate/handoff.ts`, `src/candidate/review.ts`, `server/controller.ts`, `test/handoff.test.ts`, and `test/review.test.ts` for the "Not proven" section and the closed set of non-pass judgment outcomes.
 
 **Build.**
@@ -893,7 +893,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 
 - [ ] Create `docs/prototypes/anthropic-route/` for the route prototype's receipts.
 - [ ] Edit `server/sandbox/routes.ts`, `server/sandbox/meter.ts`, `server/sandbox/gateway.ts`, and `server/provision.sh` for the Anthropic route, its usage meter, and the sandbox provider entry.
-- [ ] Edit `src/candidate/review.ts`, `src/candidate/handoff.ts`, `src/contract/acceptance.ts`, `src/workflow.ts`, and `server/controller.ts` for the family check, seat labels, cross-family certification, and named fallbacks.
+- [ ] Edit `src/candidate/review.ts`, `src/candidate/handoff.ts`, `src/contract/acceptance.ts`, `src/config/{schema,parse,load,views}.ts`, and `server/controller.ts` for the family check, seat labels, cross-family certification, and named fallbacks.
 - [ ] Edit `test/sandbox/routes.cases.ts`, `test/sandbox/gateway.cases.ts`, `test/review.test.ts`, `test/handoff.test.ts`, `test/accept.test.ts`, and `test/workflow.test.ts` for these contracts. Create a new test file only when a case fits none of them.
 - [ ] Edit `docs/operations/sandbox.md` and `docs/operations/factory-cli.md` for the route, the family labels, and the fallback receipts.
 - [ ] Edit `.github/factory/WORKFLOW.md` for the accept model, the Anthropic review seat, and any named same-family fallback. It is main-owned, so the owner authors that edit, the same as other trusted configuration.
@@ -1102,7 +1102,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Files.**
 
 - [x] Create `src/views/feed.ts`, `server/viewer/dashboard.ts`, `test/feed.test.ts`, `test/dashboard.test.ts`, `test/fixtures/owner-feed/`, and `docs/operations/backup.md`. Also create the web-app manifest and its icons. Add any new Tabler glyph to `server/viewer/design/icons/`, which the viewer restyle PR creates with the vendored SVGs and their NOTICE.
-- [x] Edit `src/views/attention.ts`, `src/workflow.ts`, `.github/factory/WORKFLOW.md`, `server/controller.ts`, `server/cli.ts`, `server/viewer.ts`, `server/viewer/render.ts`, `server/viewer/style.css`, `server/factory.service`, `extension/index.ts`, `test/attention.test.ts`, `test/viewer.test.ts`, `test/viewer-style.test.ts`, `test/extension.test.ts`, `DESIGN.md` for new glyph roles only, `docs/operations/viewer.md`, and `docs/operations/factory-cli.md` for liveness, thresholds, the feed, the dashboard, and the hold control.
+- [x] Edit `src/views/attention.ts`, `src/config/{schema,parse,load,views}.ts`, `.github/factory/WORKFLOW.md`, `server/controller.ts`, `server/cli.ts`, `server/viewer.ts`, `server/viewer/render.ts`, `server/viewer/style.css`, `server/factory.service`, `extension/index.ts`, `test/attention.test.ts`, `test/viewer.test.ts`, `test/viewer-style.test.ts`, `test/extension.test.ts`, `DESIGN.md` for new glyph roles only, `docs/operations/viewer.md`, and `docs/operations/factory-cli.md` for liveness, thresholds, the feed, the dashboard, and the hold control.
 
 **Build.**
 
@@ -1236,7 +1236,7 @@ Use the Factory CLI control procedure for all lanes. Before `F04a` lands, inspec
 **Files.**
 
 - [x] Create `src/maintenance/cadence.ts`, `test/cadence.test.ts`, `skills/improve-codebase-architecture/`, `skills/audit-instructions/`, `skills/agent-loop-hygiene/`, and `docs/operations/cadence.md`.
-- [x] Edit `src/workflow.ts`, `.github/factory/WORKFLOW.md`, `src/trust/markers.ts`, `server/controller.ts`, `server/cli.ts`, and `skills/README.md` for weekly schedules and a bounded one-shot trigger.
+- [x] Edit `src/config/{schema,parse,load,views}.ts`, `.github/factory/WORKFLOW.md`, `src/trust/markers.ts`, `server/controller.ts`, `server/cli.ts`, and `skills/README.md` for weekly schedules and a bounded one-shot trigger.
 - [x] Edit `server/sandbox.ts`, `server/sandbox/result.ts`, `src/run.ts`, `src/github/adapter.ts`, `server/provision.sh`, `src/orchestrator.ts`, `src/candidate/stages.ts`, `skills/security-review/SKILL.md`, `skills/security-review/SOURCE.md`, and their existing tests, including `test/orchestrator.test.ts`, `test/stages.test.ts`, `test/workflow.test.ts`, `test/github-adapter.test.ts`, `test/sandbox.test.ts` and `test/sandbox/**`. The coordinator widened scope to carry the non-ticket sandbox stage and receipts, share capacity and restart recovery, and adapt security's repository audit without changing diff review.
 - [x] Permit strictly necessary type-only imports or union widenings in other `server/sandbox/*.ts` files to carry the closed sandbox-stage union, with no runtime behavior change.
 - [x] Edit `docs/operations/factory-cli.md` and `docs/operations/sandbox.md` only to document the cadence command, read-only maintenance mounts and non-ticket receipt identity.
@@ -1296,14 +1296,14 @@ F12 ships in four serial PRs under decision `f12-split`. F12b owns the primary-f
 
 - [ ] Create `src/maintenance/scorers.ts`, `src/benchmarks.ts`, `src/views/explain.ts`, `test/scorers.test.ts`, `test/benchmarks.test.ts`, `test/explain.test.ts`, `test/fixtures/benchmarks/`, `skills/agent-loop-spec/`, `skills/reflect-ledger/`, and `docs/operations/improvement.md`. Left open. F12b (#703, `818cfcf`) and F12c (#704, `1d6d8e3`) created every file here except `src/benchmarks.ts`, `test/benchmarks.test.ts` and `test/fixtures/benchmarks/`, which are pending F12e.
 - [ ] Edit `src/views/metrics.ts`, `src/maintenance/replay.ts`, `src/maintenance/cadence.ts`, `src/ledger.ts`, `server/cli.ts`, `.github/factory/WORKFLOW.md`, `skills/README.md`, `test/replay.test.ts`, and `test/fixtures/replay/` for scorer, benchmark, and explain commands, score records, proposal cadence, and the wider replay corpus. Left open. F12b and F12c edited the metrics, ledger, CLI, cadence, workflow and skills files for scores, explain and proposals. The replay files, the replay corpus and the benchmark command are pending F12d and F12e.
-- [x] Edit `src/workflow.ts` and `test/workflow.test.ts` to parse trusted scorer settings and exact grader IDs. Met by F12b (#703) and extended by F12c (#704) for the trigger K and D. Verified at `1d6d8e3`. The F12b review confirmed that unpinned and non-allowlisted grader IDs are refused at parse time.
+- [x] Edit `src/config/{schema,parse,load,views}.ts` and `test/workflow.test.ts` to parse trusted scorer settings and exact grader IDs. Met by F12b (#703) and extended by F12c (#704) for the trigger K and D. Verified at `1d6d8e3`. The F12b review confirmed that unpinned and non-allowlisted grader IDs are refused at parse time.
 - [x] Edit `server/controller.ts`, `src/orchestrator.ts` and their existing tests for measurement identities and terminal sampling outside the tick await path. Met by F12b (#703). Verified at `818cfcf`, with automatic sampling after a hold added by F12c (#704). Limit. A hold consumed automatic sampling for the runs it covered at F12b's head, because the enrollment marker was written while held.
 - [x] Edit `server/sandbox.ts`, `server/sandbox/result.ts` and their existing tests to carry measurement identities through the tool-free transport and native receipts. Met by F12b (#703). Verified at `818cfcf`. Lane 6's native receipt carries the identity `measure/explain/889a6eb8…/1`.
 - [x] Edit `src/publication.ts` and `test/publication.test.ts` to append the score stream on the shared ledger ref with idempotency and fast-forward retries. Met by F12b (#703). Verified at `818cfcf`. Three score events reached `ledger/scores.jsonl` on `factory/ledger`, and the run rows stayed byte-identical. Limit. The first on-demand `score` call exits 1 with publication pending, because the 5 s publish slice cannot finish the first ledger walk. The controller's pump published the events afterwards.
 - [ ] Edit `src/candidate/stages.ts` and `test/stages.test.ts` for the shared read-only judge profile. Left open. F12b made no edit here, because the `maintain` stage already carried the `judge` profile. The F12b review confirmed that it is tool-free with one route.
 - [x] Edit `docs/operations/ledger.md` to document the append-only score stream without changing terminal row versions. Met by F12b (#703). Verified at `818cfcf`. The run rows and their versions are unchanged.
 - [x] Update only the `workflowDigest` fields in `test/fixtures/efficiency/replay.json` and `test/fixtures/efficiency/accept-replay.json` when trusted workflow bytes change. Done by F12b and F12c. Verified at `1d6d8e3`. Both PRs changed only those fields. F12d and F12e must repeat it if they change the workflow bytes.
-- [x] F12c edits `src/maintenance/cadence.ts`, `src/maintenance/scorers.ts`, `src/workflow.ts`, `server/controller.ts`, `server/cli.ts`, `.github/factory/WORKFLOW.md`, `test/cadence.test.ts`, `test/scorers.test.ts`, `test/explain.test.ts`, `test/workflow.test.ts`, `skills/README.md`, `docs/operations/cadence.md`, `docs/operations/improvement.md`, this plan at `docs/plans/factory-v1.md`, and only `workflowDigest` in the two efficiency fixtures above. The coordinator also granted the score-command publication-status fix, verified run-checkpoint reuse and automatic sampling after a hold.
+- [x] F12c edits `src/maintenance/cadence.ts`, `src/maintenance/scorers.ts`, `src/config/{schema,parse,load,views}.ts`, `server/controller.ts`, `server/cli.ts`, `.github/factory/WORKFLOW.md`, `test/cadence.test.ts`, `test/scorers.test.ts`, `test/explain.test.ts`, `test/workflow.test.ts`, `skills/README.md`, `docs/operations/cadence.md`, `docs/operations/improvement.md`, this plan at `docs/plans/factory-v1.md`, and only `workflowDigest` in the two efficiency fixtures above. The coordinator also granted the score-command publication-status fix, verified run-checkpoint reuse and automatic sampling after a hold.
 - [x] F12c creates `skills/reflect-ledger/SKILL.md`, `skills/reflect-ledger/SOURCE.md`, `skills/reflect-ledger/LICENSE`, `skills/agent-loop-spec/SKILL.md` and `skills/agent-loop-spec/SOURCE.md`. Reflect is MIT, Lauren Tan. Agent-loop-spec is owner-authored with no upstream licence, following the hygiene precedent and disclosing the Cursor Agent-authored upstream commit.
 
 **Build.**
@@ -1367,7 +1367,7 @@ F12 ships in four serial PRs under decision `f12-split`. F12b owns the primary-f
 **Files.**
 
 - [ ] Create `src/adapters/linear.ts`, `test/linear-adapter.test.ts`, `test/adapter-contract.test.ts`, `docs/prototypes/linear-polling/`, and `docs/operations/linear.md`.
-- [ ] Edit `src/github/tickets.ts`, `src/trust/admission.ts`, `src/orchestrator.ts`, `src/run.ts`, `src/workflow.ts`, `src/trust/markers.ts`, `server/controller.ts`, `server/cli.ts`, `test/fake-ticket-adapter.ts`, `test/admission.test.ts`, `test/orchestrator.test.ts`, and `.github/factory/WORKFLOW.md` only for provider configuration, capability ports, and shared adapter contract support.
+- [ ] Edit `src/github/tickets.ts`, `src/trust/admission.ts`, `src/orchestrator.ts`, `src/run.ts`, `src/config/{schema,parse,load,views}.ts`, `src/trust/markers.ts`, `server/controller.ts`, `server/cli.ts`, `test/fake-ticket-adapter.ts`, `test/admission.test.ts`, `test/orchestrator.test.ts`, and `.github/factory/WORKFLOW.md` only for provider configuration, capability ports, and shared adapter contract support.
 
 **Build.**
 

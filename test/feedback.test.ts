@@ -1,42 +1,42 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
 import {
 	mkdtempSync,
 	readFileSync,
 	readdirSync,
+	rmSync,
 	statSync,
 	writeFileSync,
-	rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { test } from "node:test";
 import {
-	classifyFeedback,
-	renderFeedbackCards,
+	observeFeedback,
+	storeFeedbackBatch,
+	sweepMergedFeedback,
+} from "../server/controller.ts";
+import {
+	FEEDBACK_CARD_BYTES,
 	builderDispositions,
 	builderFindingDispositions,
-	wireBuilderDecisions,
+	classifyFeedback,
 	feedbackId,
-	FEEDBACK_CARD_BYTES,
+	renderFeedbackCards,
+	wireBuilderDecisions,
 	type FeedbackEvent,
 	type FeedbackId,
 } from "../src/candidate/feedback.ts";
-import {
-	storeFeedbackBatch,
-	observeFeedback,
-	sweepMergedFeedback,
-} from "../server/controller.ts";
-import { GitHubTicketAdapter } from "../src/github/adapter.ts";
+import { isGitSha } from "../src/config/schema.ts";
 import { digestOf } from "../src/core/run.ts";
-import { isGitSha, isRepoSlug } from "../src/workflow.ts";
+import { GitHubTicketAdapter } from "../src/github/adapter.ts";
+import { EXE_DEV_PLATFORM, isRepoSlug } from "../src/trust/platform.ts";
 import {
+	BOT_LOGIN,
 	FAKE_REPO,
 	FakeGitHub,
 	fakeIssue,
-	BOT_LOGIN,
 	httpError,
 } from "./fake-ticket-adapter.ts";
-import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 
 const repo = FAKE_REPO;
 

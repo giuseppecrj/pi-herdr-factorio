@@ -16,12 +16,8 @@ import {
 import { digestOf, runIdOf } from "../src/core/run.ts";
 import type { HandoffReason } from "../src/candidate/state.ts";
 import type { JsonValue } from "../src/core/json.ts";
-import {
-	type GitSha,
-	isGitSha,
-	isRepoSlug,
-	type RepoSlug,
-} from "../src/workflow.ts";
+import { type GitSha, isGitSha } from "../src/config/schema.ts";
+import { isRepoSlug, type RepoSlug } from "../src/trust/platform.ts";
 import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 
 function slug(text: string): RepoSlug {

@@ -107,44 +107,48 @@ import {
 	type Answer,
 	type AnswersRecord,
 	answerBody,
-	acceptanceKey,
-	renderAcceptanceSummary,
-	renderBuildSummary,
-	buildKey,
 	answersDigestOf,
 	type Contract,
 	CONTRACT_VERSION,
 	contractBytes,
 	type ContractDigest,
 	contractDigestOf,
-	contractKey,
 	type InlinedFile,
 	type SourceFacts,
-	sourceExcerpts,
-	sourceFacts,
-	specifySourceFacts,
 	type Link,
-	INLINE_TOTAL_BYTES,
-	inlined,
 	MAX_ANSWERS,
-	NAMED_FILE_BYTES,
-	NAMED_FILE_READ_BYTES,
 	NEEDS_INFO_LABEL,
-	namedFiles,
-	parseSpecifyOutput,
 	type Question,
 	type QuestionsDigest,
 	questionsDigestOf,
+	type SpecifyReviewInput,
+} from "./contract/contract.ts";
+import { parseSpecifyOutput } from "./contract/parse.ts";
+import {
+	acceptanceKey,
+	renderAcceptanceSummary,
+	renderBuildSummary,
+	buildKey,
+	contractKey,
 	questionsKey,
 	questionsKeyOf,
 	renderQuestions,
 	renderSummary,
+	withoutKey,
+} from "./contract/render.ts";
+import {
+	sourceExcerpts,
+	sourceFacts,
+	specifySourceFacts,
+	INLINE_TOTAL_BYTES,
+	inlined,
+	NAMED_FILE_BYTES,
+	NAMED_FILE_READ_BYTES,
+	namedFiles,
 	SPECIFY_SKILLS,
 	SPECIFY_TOOLS,
 	specifyPrompt,
-	type SpecifyReviewInput,
-	withoutKey,
-} from "./specify.ts";
+} from "./contract/prompt.ts";
 import type { CadenceRunner } from "./maintenance/cadence.ts";
 import type { PlatformProfile } from "./trust/platform.ts";
 import { isLogin } from "./github/adapter.ts";
@@ -161,12 +165,12 @@ import {
 	type EnvLookup,
 	type GitSha,
 	type ModelId,
-	type RepoSlug,
 	STAGE_CLEANUP_RESERVE_MS,
 	type WorkflowConfig,
-	parseWorkflow,
 	WORKFLOW_PATH,
-} from "./workflow.ts";
+} from "./config/schema.ts";
+import { parseWorkflow } from "./config/parse.ts";
+import type { RepoSlug } from "./trust/platform.ts";
 import { digestOf, isDigest } from "./core/run.ts";
 import {
 	LedgerRowError,
@@ -266,7 +270,7 @@ export type StageLaunchInput = {
 		readonly seq: number;
 	};
 	readonly maintenance?: {
-		readonly job: import("./workflow.ts").CadenceJob;
+		readonly job: import("./config/schema.ts").CadenceJob;
 		readonly windowStart: number;
 	};
 	readonly acceptEffort?: AcceptEffort;
@@ -1283,7 +1287,7 @@ export class Orchestrator {
 	}
 
 	/** One-shot audit admission shares ticket reservations without launching or claiming ticket work. */
-	async cadenceOnce(job: import("./workflow.ts").CadenceJob) {
+	async cadenceOnce(job: import("./config/schema.ts").CadenceJob) {
 		await this.#input.executor.recover();
 
 		const reconciled = await this.#input.executor.reconciled();

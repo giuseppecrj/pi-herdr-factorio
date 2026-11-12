@@ -15,31 +15,31 @@ import {
 	ghTarball,
 } from "../../../../../server/controller.ts";
 import {
-	prepareRepairTree,
-	readPatch,
-} from "../../../../../src/candidate/build.ts";
-import { acceptanceEntries } from "../../../../../src/contract/acceptance.ts";
-import { digestOf, isDigest } from "../../../../../src/core/run.ts";
-import {
-	readPlatformFile,
-	resolvePlatform,
-} from "../../../../../src/trust/platform.ts";
-import {
-	fieldOf,
-	objectOf,
-	parseJson,
-	textOf,
-} from "../../../../../src/core/json.ts";
-import { isGitSha } from "../../../../../src/workflow.ts";
-import {
 	launchSandbox,
 	locateBundle,
 	SANDBOX_ROOT,
 } from "../../../../../server/sandbox.ts";
 import { startGatewayProcess } from "../../../../../server/sandbox/gateway-client.ts";
 import { builtinTable } from "../../../../../server/sandbox/routes.ts";
-import { detectArch } from "../../../../../server/sandbox/seccomp.ts";
 import { stopScopeArgv } from "../../../../../server/sandbox/scope.ts";
+import { detectArch } from "../../../../../server/sandbox/seccomp.ts";
+import {
+	prepareRepairTree,
+	readPatch,
+} from "../../../../../src/candidate/build.ts";
+import { isGitSha } from "../../../../../src/config/schema.ts";
+import { acceptanceEntries } from "../../../../../src/contract/acceptance.ts";
+import {
+	fieldOf,
+	objectOf,
+	parseJson,
+	textOf,
+} from "../../../../../src/core/json.ts";
+import { digestOf, isDigest } from "../../../../../src/core/run.ts";
+import {
+	readPlatformFile,
+	resolvePlatform,
+} from "../../../../../src/trust/platform.ts";
 
 const [stateArg, id] = process.argv.slice(2);
 

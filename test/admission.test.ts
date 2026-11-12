@@ -14,6 +14,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { EXIT, runCli } from "../server/cli.ts";
+import { loadWorkflow } from "../src/config/load.ts";
+import type { JsonValue } from "../src/core/json.ts";
+import { digestOf } from "../src/core/run.ts";
+import type { BodyHistory } from "../src/github/adapter.ts";
 import {
 	type AdmissionReceipt,
 	type AdmittedReceipt,
@@ -23,10 +27,11 @@ import {
 	labelTimeSnapshot,
 	snapshotDigest,
 } from "../src/trust/admission.ts";
-import type { BodyHistory } from "../src/github/adapter.ts";
-import { digestOf } from "../src/core/run.ts";
-import type { JsonValue } from "../src/core/json.ts";
-import { isRepoSlug, loadWorkflow, type RepoSlug } from "../src/workflow.ts";
+import {
+	EXE_DEV_PLATFORM,
+	isRepoSlug,
+	type RepoSlug,
+} from "../src/trust/platform.ts";
 import {
 	FAKE_REPO,
 	FakeGitHub,
@@ -39,7 +44,6 @@ import {
 	renamedEvent,
 	TRUSTED_WORKFLOW,
 } from "./fake-ticket-adapter.ts";
-import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 import { controllerEnv, noPlatformFile } from "./helpers.ts";
 
 function slug(text: string): RepoSlug {

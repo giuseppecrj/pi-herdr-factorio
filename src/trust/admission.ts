@@ -6,10 +6,21 @@ import {
 	mkdir,
 	open,
 	readdir,
+	readFile,
 	unlink,
 } from "node:fs/promises";
-import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { loadWorkflow } from "../config/load.ts";
+import {
+	type EnvLookup,
+	type GitSha,
+	isGitSha,
+	TRUSTED_REF,
+	type WorkflowError,
+	type WorkflowLoad,
+} from "../config/schema.ts";
+import type { JsonValue } from "../core/json.ts";
+import { type Digest, digestOf, isDigest, type NonEmpty } from "../core/run.ts";
 import {
 	type Actor,
 	actorText,
@@ -20,33 +31,25 @@ import {
 	type GitHubPaging,
 	GitHubTicketAdapter,
 	isLogin,
-	isTimestamp,
 	issueUrl,
+	isTimestamp,
 	type TimelineEntry,
 } from "../github/adapter.ts";
+import type { Exec } from "../github/exec.ts";
+import {
+	EXE_DEV_PLATFORM,
+	type PlatformProfile,
+	type RepoSlug,
+} from "./platform.ts";
 import {
 	hasWriteAccess,
 	LOCAL_DISABLE_FILE,
-	type PermissionLevel,
 	parsePermissionLevel,
+	type PermissionLevel,
 	READY_LABEL,
 	REPO_SWITCH_LABEL,
 	type WritePermission,
 } from "./policy.ts";
-import { EXE_DEV_PLATFORM, type PlatformProfile } from "./platform.ts";
-import { type Digest, digestOf, isDigest, type NonEmpty } from "../core/run.ts";
-import type { JsonValue } from "../core/json.ts";
-import {
-	type EnvLookup,
-	type Exec,
-	type GitSha,
-	isGitSha,
-	loadWorkflow,
-	type RepoSlug,
-	TRUSTED_REF,
-	type WorkflowError,
-	type WorkflowLoad,
-} from "../workflow.ts";
 
 /** The exe-dev profile's repositories, kept for test imports. Production reads `platform.repositories`. */
 export const FACTORY_REPOSITORIES: readonly RepoSlug[] =

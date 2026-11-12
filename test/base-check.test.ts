@@ -15,19 +15,6 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
-import { writeAcceptance } from "../src/contract/acceptance.ts";
-import {
-	parseSpecifyOutput,
-	contractBytes,
-	contractDigestOf,
-	type Contract,
-} from "../src/specify.ts";
-import {
-	baseTreeDigest,
-	exportTree,
-	runHeldoutBase,
-	runDraftBase,
-} from "../server/gates.ts";
 import {
 	checkoutWorkspace,
 	controllerBaseChecker,
@@ -35,16 +22,30 @@ import {
 	fileRunFiles,
 } from "../server/controller.ts";
 import {
+	baseTreeDigest,
+	exportTree,
+	runDraftBase,
+	runHeldoutBase,
+} from "../server/gates.ts";
+import {
 	assessBase,
 	baseRefusalNotice,
 	baseRetryFeedback,
+	draftCheckFeedback,
 	parseBaseReceipt,
 	retryableBaseReason,
 	type BaseReason,
-	draftCheckFeedback,
 } from "../src/candidate/diagnosis.ts";
+import { isGitSha } from "../src/config/schema.ts";
+import { writeAcceptance } from "../src/contract/acceptance.ts";
+import {
+	contractBytes,
+	contractDigestOf,
+	type Contract,
+} from "../src/contract/contract.ts";
+import { parseSpecifyOutput } from "../src/contract/parse.ts";
 import { digestOf } from "../src/core/run.ts";
-import { isGitSha, isRepoSlug } from "../src/workflow.ts";
+import { isRepoSlug } from "../src/trust/platform.ts";
 
 function missing(argv: readonly string[]): string | null {
 	const [command = "", ...args] = argv;

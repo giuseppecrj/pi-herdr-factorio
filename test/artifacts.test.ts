@@ -1,38 +1,39 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
-	mkdtempSync,
 	chmodSync,
 	existsSync,
-	renameSync,
-	readFileSync,
-	writeFileSync,
 	lstatSync,
+	mkdtempSync,
 	readdirSync,
+	readFileSync,
+	renameSync,
 	rmSync,
-	unlinkSync,
 	symlinkSync,
+	unlinkSync,
+	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
+import { fileRunFiles } from "../server/controller.ts";
+import { bwrapArgv } from "../server/sandbox/bwrap.ts";
+import { isGitSha } from "../src/config/schema.ts";
 import {
 	ACCEPTANCE_MAX_BYTES,
-	writeAcceptance,
 	acceptanceDigestOf,
 	acceptanceEntries,
 	type AcceptanceSuite,
+	writeAcceptance,
 } from "../src/contract/acceptance.ts";
 import { ARTIFACT_ACCESS, fileArtifacts } from "../src/contract/artifacts.ts";
-import { digestOf } from "../src/core/run.ts";
 import {
 	type Contract,
 	contractBytes,
 	contractDigestOf,
-} from "../src/specify.ts";
-import { isGitSha, isRepoSlug } from "../src/workflow.ts";
-import { fileRunFiles } from "../server/controller.ts";
-import { bwrapArgv } from "../server/sandbox/bwrap.ts";
+} from "../src/contract/contract.ts";
+import { digestOf } from "../src/core/run.ts";
+import { isRepoSlug } from "../src/trust/platform.ts";
 
 const repo = "giuseppecrj/pi-herdr-factorio";
 const sha = "a".repeat(40);

@@ -1,7 +1,8 @@
 import { readFile, readdir, readlink } from "node:fs/promises";
 import { join } from "node:path";
+import { isGitSha } from "../../src/config/schema.ts";
 import { digestOf } from "../../src/core/run.ts";
-import { isGitSha, type Exec } from "../../src/workflow.ts";
+import type { Exec } from "../../src/github/exec.ts";
 import { manifestDigest } from "../sandbox/manifest.ts";
 
 const DIGEST = /^[a-f0-9]{64}$/;

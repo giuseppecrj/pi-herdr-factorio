@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { BOT_EMAIL, gitObjectSha } from "../src/github/publish.ts";
 import { type Exec, type ExecResult } from "../src/github/exec.ts";
 import { CONTROLLER_LOGIN } from "../src/trust/markers.ts";
-import { isRepoSlug, type RepoSlug } from "../src/workflow.ts";
+import { isRepoSlug, type RepoSlug } from "../src/trust/platform.ts";
 import {
 	arrayOf,
 	fieldOf,

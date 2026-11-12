@@ -12,37 +12,39 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import {
 	collectPatch,
-	publicationTree,
 	prepareRepairTree,
+	publicationTree,
 } from "../src/candidate/build.ts";
-import { cadenceEligiblePath } from "../src/maintenance/cadence.ts";
-import { digestOf } from "../src/core/run.ts";
-import {
-	type Stage,
-	type SandboxStage,
-	type ModelStage,
-	type ExecutionStage,
-	STAGE_ORDER,
-	MODEL_STAGES,
-	SANDBOX_STAGES,
-	EXECUTION_STAGES,
-	isStage,
-} from "../src/core/stages.ts";
 import {
 	classifyFeedback,
 	feedbackId,
 	type FeedbackEvent,
 } from "../src/candidate/feedback.ts";
-import { checkChangedPaths } from "../src/trust/policy.ts";
 import { parseSeat, reviewSeats } from "../src/candidate/review.ts";
-import { acceptanceSourcePath, parseSpecifyOutput } from "../src/specify.ts";
 import {
 	formatStageTable,
 	nextStage,
 	STAGE_PROFILES,
 } from "../src/candidate/stages.ts";
 import { parseCheckFeedback } from "../src/candidate/validation.ts";
-import { isGitSha, isRepoSlug } from "../src/workflow.ts";
+import { isGitSha } from "../src/config/schema.ts";
+import { parseSpecifyOutput } from "../src/contract/parse.ts";
+import { acceptanceSourcePath } from "../src/contract/prompt.ts";
+import { digestOf } from "../src/core/run.ts";
+import {
+	EXECUTION_STAGES,
+	isStage,
+	MODEL_STAGES,
+	SANDBOX_STAGES,
+	STAGE_ORDER,
+	type ExecutionStage,
+	type ModelStage,
+	type SandboxStage,
+	type Stage,
+} from "../src/core/stages.ts";
+import { cadenceEligiblePath } from "../src/maintenance/cadence.ts";
+import { isRepoSlug } from "../src/trust/platform.ts";
+import { checkChangedPaths } from "../src/trust/policy.ts";
 
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 

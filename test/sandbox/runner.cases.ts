@@ -64,11 +64,13 @@ import {
 	type Contract,
 	contractBytes,
 	contractDigestOf,
+} from "../../src/contract/contract.ts";
+import {
 	inlined,
 	sourceExcerpts,
 	sourceFacts,
 	renderInlined,
-} from "../../src/specify.ts";
+} from "../../src/contract/prompt.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -135,12 +137,9 @@ import {
 	SessionTracker,
 } from "../../server/sandbox/settle.ts";
 import { type Digest, REVIEW_MAX_TOKENS } from "../../src/core/run.ts";
-import {
-	isGitSha,
-	isRepoSlug,
-	type ModelId,
-	parseWorkflow,
-} from "../../src/workflow.ts";
+import { isGitSha, type ModelId } from "../../src/config/schema.ts";
+import { parseWorkflow } from "../../src/config/parse.ts";
+import { isRepoSlug } from "../../src/trust/platform.ts";
 import {
 	Orchestrator,
 	type StageExecutor,

@@ -9,7 +9,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { it } from "node:test";
-import { parseWorkflow, isGitSha } from "../src/workflow.ts";
+import { isGitSha } from "../src/config/schema.ts";
+import { parseWorkflow } from "../src/config/parse.ts";
 import { digestOf, runIdOf } from "../src/core/run.ts";
 import {
 	sampled,

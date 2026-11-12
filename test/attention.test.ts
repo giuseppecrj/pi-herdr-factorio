@@ -14,7 +14,8 @@ import { after, test } from "node:test";
 import { readAttention, ATTENTION_KINDS } from "../src/views/attention.ts";
 import { readOwnerFeed } from "../server/cli/owner-feed.ts";
 import { digestOf, runIdOf } from "../src/core/run.ts";
-import { isRepoSlug, parseWorkflow } from "../src/workflow.ts";
+import { parseWorkflow } from "../src/config/parse.ts";
+import { isRepoSlug } from "../src/trust/platform.ts";
 import { runCli } from "../server/cli.ts";
 import { registerFactory } from "../extension/index.ts";
 import type { JsonValue } from "../src/core/json.ts";
@@ -28,7 +29,7 @@ import type { CandidateState } from "../src/candidate/state.ts";
 import { dispatchNonce } from "../src/candidate/validation.ts";
 import { candidateBranch } from "../src/github/publish.ts";
 import { REQUIRED_CI_CHECKS } from "../src/core/run.ts";
-import { isGitSha } from "../src/workflow.ts";
+import { isGitSha } from "../src/config/schema.ts";
 import type { PatchReceipt } from "../src/candidate/build.ts";
 import { execFileSync } from "node:child_process";
 import {
@@ -38,7 +39,7 @@ import {
 } from "./helpers.ts";
 import { TRUSTED_RUN_CAP, TRUSTED_WORKFLOW } from "./fake-ticket-adapter.ts";
 import { fileRunFiles } from "../server/controller.ts";
-import type { AnswersDigest } from "../src/specify.ts";
+import type { AnswersDigest } from "../src/contract/contract.ts";
 import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 import { noPlatformFile } from "./helpers.ts";
 

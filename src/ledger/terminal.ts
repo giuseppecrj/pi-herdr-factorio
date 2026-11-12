@@ -10,7 +10,8 @@ import {
 } from "../candidate/diagnosis.ts";
 import type { TerminalStatus } from "../trust/markers.ts";
 import type { Stage } from "../core/stages.ts";
-import type { GitSha, RepoSlug } from "../workflow.ts";
+import type { GitSha } from "../config/schema.ts";
+import type { RepoSlug } from "../trust/platform.ts";
 import { objectOf, type JsonValue } from "../core/json.ts";
 import {
 	ACCEPT_DISPOSITIONS,

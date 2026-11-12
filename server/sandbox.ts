@@ -46,7 +46,8 @@ import {
 	reviewReceiptDigest,
 	type ReviewExecution,
 } from "../src/candidate/state.ts";
-import { isGitSha, parseWorkflow, WORKFLOW_PATH } from "../src/workflow.ts";
+import { isGitSha, WORKFLOW_PATH } from "../src/config/schema.ts";
+import { parseWorkflow } from "../src/config/parse.ts";
 import type { ExecutionStage as ModelStage } from "../src/core/stages.ts";
 import {
 	CONTROL_PLANE_DIR,
@@ -113,14 +114,13 @@ import {
 import {
 	parseSpecifyOutput,
 	parseReviewOutput,
-	reviewPrompt,
-	revisionPrompt,
-} from "../src/specify.ts";
+} from "../src/contract/parse.ts";
+import { reviewPrompt, revisionPrompt } from "../src/contract/prompt.ts";
 import {
 	type AcceptEffort,
 	type ModelId,
 	STAGE_CLEANUP_RESERVE_MS,
-} from "../src/workflow.ts";
+} from "../src/config/schema.ts";
 import {
 	checkoutWorkspace,
 	checkoutBuildWorkspace,
@@ -278,7 +278,7 @@ export type StageRunInput = {
 	readonly stage: ModelStage;
 	readonly attempt: number;
 	readonly prompt: string;
-	readonly source?: import("../src/specify.ts").SourceFacts;
+	readonly source?: import("../src/contract/contract.ts").SourceFacts;
 	readonly draftCheck?: (
 		text: string,
 		context: DraftCheckContext,

@@ -18,11 +18,11 @@ Two matchers keep their own spelling on purpose. They match the gate container's
 
 ## Other folders
 
-`src/github/` talks to GitHub: `adapter.ts` is the tracker adapter, `tickets.ts` holds the tracker-neutral ticket types, and `exec.ts` holds the shared `Exec` process-runner type that replay and sandbox preflight also use for `git`. `src/contract/` holds what a run promises: the acceptance suite and stored artifacts. `src/candidate/` judges a candidate: build, review, validation, feedback, diagnosis and stage transitions. Its stored book has three homes. `state.ts` holds the book's types, limits, identity, freezing and receipt binding. `codec.ts` decodes the stored wire format and migrates older versions. `handoff.ts` holds the policy: transitions, accounting and certification. A new persisted field usually touches `state.ts` and `codec.ts` together. A new wire version goes in `codec.ts`. A new policy rule goes in `handoff.ts`. `src/views/` turns stored state into the owner feed, attention list, explanations and metrics. `src/maintenance/` holds scheduled and replay work: cadence audits, replay and scorers.
+`src/github/` talks to GitHub: `adapter.ts` is the tracker adapter, `tickets.ts` holds the tracker-neutral ticket types, and `exec.ts` holds the shared `Exec` process-runner type that replay and sandbox preflight also use for `git`. `src/config/` reads `WORKFLOW.md`. `schema.ts` holds the workflow types and limits, `parse.ts` parses the front matter into them, `load.ts` fetches and reloads the file from a pinned revision, and `views.ts` derives the per-stage settings other code reads. `src/contract/` holds what a run promises. `contract.ts` holds the contract types, `parse.ts` parses specify output into a contract (a different job from the config parser), `render.ts` renders contracts and summaries, `prompt.ts` builds the specify and review prompts, `acceptance.ts` holds the acceptance suite and its binding, and `artifacts.ts` stores them. `src/candidate/` judges a candidate: build, review, validation, feedback, diagnosis and stage transitions. Its stored book has three homes. `state.ts` holds the book's types, limits, identity, freezing and receipt binding. `codec.ts` decodes the stored wire format and migrates older versions. `handoff.ts` holds the policy: transitions, accounting and certification. A new persisted field usually touches `state.ts` and `codec.ts` together. A new wire version goes in `codec.ts`. A new policy rule goes in `handoff.ts`. `src/views/` turns stored state into the owner feed, attention list, explanations and metrics. `src/maintenance/` holds scheduled and replay work: cadence audits, replay and scorers.
 
 ## Review seats
 
-`reviewSeats` in `src/candidate/review.ts` names the files that get the `ultrareview` seat. It covers all of `src/core/`, and in `src/trust/` only `protected-paths.ts`, `policy.ts` and `admission.ts`. In `src/github/` it covers `adapter.ts` and `exec.ts`, not the whole folder. Apart from `src/core/run.ts`, which gained the seat in L03, these are the seats the files had before the layout program. Widening them costs review budget and needs the owner.
+`reviewSeats` in `src/candidate/review.ts` names the files that get the `ultrareview` seat. It covers all of `src/core/` and all of `src/config/`, and in `src/trust/` only `protected-paths.ts`, `policy.ts` and `admission.ts`. In `src/github/` it covers `adapter.ts` and `exec.ts`, not the whole folder. Apart from `src/core/run.ts`, which gained the seat in L03, these are the seats the files had before the layout program. Widening them costs review budget and needs the owner.
 
 ## `src/ledger`
 
@@ -35,9 +35,9 @@ L06 moved the intact modules into their owner folders. Files marked pending stay
 | Owner | Files in that folder | Pending move and split |
 | --- | --- | --- |
 | `src/trust` | `protected-paths.ts`, `policy.ts`, `platform.ts`, `admission.ts`, `markers.ts` | None |
-| `src/config` | Not created | `src/workflow.ts` in L08 |
+| `src/config` | `schema.ts`, `parse.ts`, `load.ts`, `views.ts` | None |
 | `src/github` | `adapter.ts`, `exec.ts`, `tickets.ts`, `publish.ts` | None |
-| `src/contract` | `acceptance.ts`, `artifacts.ts` | `src/specify.ts` in L08 |
+| `src/contract` | `contract.ts`, `parse.ts`, `render.ts`, `prompt.ts`, `acceptance.ts`, `artifacts.ts` | None |
 | `src/candidate` | `state.ts`, `codec.ts`, `handoff.ts`, `build.ts`, `review.ts`, `validation.ts`, `feedback.ts`, `diagnosis.ts`, `stages.ts` | None |
 | `src/ledger` | `schema.ts`, `git.ts`, `append.ts`, `terminal.ts`, `outbox.ts` | None |
 | `src/controller` | Not created | `src/orchestrator.ts` in L10 |

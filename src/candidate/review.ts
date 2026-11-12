@@ -6,14 +6,14 @@ import {
 	privateDir,
 	regularText,
 } from "../contract/artifacts.ts";
-import { checkChangedPaths } from "../trust/policy.ts";
 import {
 	blocksReview,
 	digestOf,
+	verdictPasses,
 	type Digest,
 	type Verdict,
-	verdictPasses,
 } from "../core/run.ts";
+import { checkChangedPaths } from "../trust/policy.ts";
 
 export {
 	REVIEW_MAX_TOKENS,
@@ -21,7 +21,7 @@ export {
 	blocksReview,
 } from "../core/run.ts";
 
-import type { Contract } from "../specify.ts";
+import type { Contract } from "../contract/contract.ts";
 import {
 	arrayOf,
 	countOf,
@@ -349,7 +349,7 @@ export function reviewSeats(
 ): ReviewSeat[] {
 	const risk =
 		paths.some((path) =>
-			/^(?:src\/workflow\.ts|src\/core\/|src\/trust\/(?:protected-paths|policy|admission)\.ts|src\/github\/(?:adapter|exec)\.ts|src\/contract\/artifacts\.ts|src\/candidate\/(?:stages|review)\.ts|server\/sandbox(?:\.ts|\/)|server\/(?:gates\.ts|provision\.sh)|package(?:-lock)?\.json$|skills\/)/.test(
+			/^(?:src\/config\/|src\/core\/|src\/trust\/(?:protected-paths|policy|admission)\.ts|src\/github\/(?:adapter|exec)\.ts|src\/contract\/artifacts\.ts|src\/candidate\/(?:stages|review)\.ts|server\/sandbox(?:\.ts|\/)|server\/(?:gates\.ts|provision\.sh)|package(?:-lock)?\.json$|skills\/)/.test(
 				path,
 			),
 		) ||

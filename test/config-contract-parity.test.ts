@@ -1,38 +1,68 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { test } from "node:test";
-import { digestOf } from "../src/core/run.ts";
-import type { JsonValue } from "../src/core/json.ts";
-import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
 import {
-	isRepoSlug,
-	isGitSha,
-	parseWorkflow,
-	loadWorkflow,
 	loadPinnedWorkflow,
+	loadWorkflow,
 	reloadWorkflow,
 	trustedWorkflowConfig,
-	checkReport,
-	statusReport,
-	type Exec,
-} from "../src/workflow.ts";
+} from "../src/config/load.ts";
+import { parseWorkflow } from "../src/config/parse.ts";
+import { isGitSha } from "../src/config/schema.ts";
+import { checkReport, statusReport } from "../src/config/views.ts";
+import { parseAcceptanceBinding } from "../src/contract/acceptance.ts";
 import {
+	answersDigestOf,
 	contractBytes,
 	contractDigestOf,
 	questionsDigestOf,
-	answersDigestOf,
-	renderSummary,
-	renderQuestions,
-	renderAcceptanceSummary,
-	renderBuildSummary,
-	specifyPrompt,
-	reviewPrompt,
-	revisionPrompt,
-	parseSpecifyOutput,
 	type Contract,
 	type ContractDraft,
 	type PromptInput,
-} from "../src/specify.ts";
-import { parseAcceptanceBinding } from "../src/candidate/diagnosis.ts";
+} from "../src/contract/contract.ts";
+import { parseSpecifyOutput } from "../src/contract/parse.ts";
+import {
+	reviewPrompt,
+	revisionPrompt,
+	specifyPrompt,
+} from "../src/contract/prompt.ts";
+import {
+	renderAcceptanceSummary,
+	renderBuildSummary,
+	renderQuestions,
+	renderSummary,
+} from "../src/contract/render.ts";
+import type { JsonValue } from "../src/core/json.ts";
+import { digestOf } from "../src/core/run.ts";
+import type { Exec } from "../src/github/exec.ts";
+import { EXE_DEV_PLATFORM, isRepoSlug } from "../src/trust/platform.ts";
+
+test("L08 owner modules load independently in fresh processes", () => {
+	for (const module of [
+		new URL("../src/config/schema.ts", import.meta.url),
+		new URL("../src/config/parse.ts", import.meta.url),
+		new URL("../src/config/load.ts", import.meta.url),
+		new URL("../src/config/views.ts", import.meta.url),
+		new URL("../src/contract/contract.ts", import.meta.url),
+		new URL("../src/contract/parse.ts", import.meta.url),
+		new URL("../src/contract/render.ts", import.meta.url),
+		new URL("../src/contract/prompt.ts", import.meta.url),
+		new URL("../src/contract/acceptance.ts", import.meta.url),
+	]) {
+		const result = spawnSync(
+			process.execPath,
+			[
+				"--experimental-strip-types",
+				"--input-type=module",
+				"-e",
+				`await import(${JSON.stringify(module.href)});`,
+			],
+			{ encoding: "utf8" },
+		);
+
+		assert.equal(result.status, 0, `${module.pathname}: ${result.stderr}`);
+	}
+});
 
 const repo = "layout-pin/config-contract";
 const sha = "a".repeat(40);

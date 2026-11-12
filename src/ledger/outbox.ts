@@ -1,5 +1,5 @@
 import type { Digest } from "../core/run.ts";
-import type { GitSha } from "../workflow.ts";
+import type { GitSha } from "../config/schema.ts";
 import type { JsonValue } from "../core/json.ts";
 import type { LedgerApi } from "./git.ts";
 import {

@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { describe, it } from "node:test";
 import {
 	cpSync,
 	mkdirSync,
@@ -11,8 +10,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { describe, it } from "node:test";
 import { runHeldoutBase } from "../server/gates.ts";
 import { assessBase } from "../src/candidate/diagnosis.ts";
+import { isGitSha } from "../src/config/schema.ts";
 import {
 	ACCEPTANCE_ISOLATION,
 	acceptancePrompt,
@@ -22,17 +23,19 @@ import {
 	writeAcceptance,
 } from "../src/contract/acceptance.ts";
 import { fileArtifacts } from "../src/contract/artifacts.ts";
-import { type FamilyInput, familyLabel } from "../src/core/models.ts";
-import { digestOf } from "../src/core/run.ts";
 import {
-	renderAcceptanceSummary,
-	acceptanceKey,
+	type Contract,
 	contractBytes,
 	contractDigestOf,
-} from "../src/specify.ts";
+} from "../src/contract/contract.ts";
+import {
+	acceptanceKey,
+	renderAcceptanceSummary,
+} from "../src/contract/render.ts";
 import type { JsonObject } from "../src/core/json.ts";
-import type { Contract } from "../src/specify.ts";
-import { isGitSha, isRepoSlug } from "../src/workflow.ts";
+import { type FamilyInput, familyLabel } from "../src/core/models.ts";
+import { digestOf } from "../src/core/run.ts";
+import { isRepoSlug } from "../src/trust/platform.ts";
 
 const repo = "giuseppecrj/pi-herdr-factorio";
 const sha = "a".repeat(40);

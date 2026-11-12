@@ -25,12 +25,12 @@ import {
 	contractDigestOf,
 	isContractDigest,
 	type Contract,
-} from "../src/specify.ts";
+} from "../src/contract/contract.ts";
 import { writeAcceptance } from "../src/contract/acceptance.ts";
+import type { AcceptanceBinding } from "../src/contract/acceptance.ts";
 import {
 	assessBase,
 	classifyFailure,
-	type AcceptanceBinding,
 	type BaseProof,
 	type BaseReceipt,
 	type FailureClass,
@@ -61,7 +61,8 @@ import {
 	type ValidationState,
 } from "../src/candidate/validation.ts";
 import type { PatchReceipt } from "../src/candidate/build.ts";
-import { isGitSha, isRepoSlug } from "../src/workflow.ts";
+import { isGitSha } from "../src/config/schema.ts";
+import { isRepoSlug } from "../src/trust/platform.ts";
 import { EXE_DEV_PLATFORM, type PlatformFile } from "../src/trust/platform.ts";
 import {
 	fakeIssue,

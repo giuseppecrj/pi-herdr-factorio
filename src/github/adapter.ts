@@ -3,17 +3,21 @@ import {
 	type FeedbackEvent,
 	type InlineComment,
 } from "../candidate/feedback.ts";
+import { isGitSha, type GitSha } from "../config/schema.ts";
+import type { JsonValue } from "../core/json.ts";
+import type { Digest, TicketRef } from "../core/run.ts";
+import type { RepoSlug } from "../trust/platform.ts";
 import {
 	hasWriteAccess,
-	type PermissionLevel,
 	parsePermissionLevel,
 	READY_LABEL,
 	REPO_SWITCH_LABEL,
+	type PermissionLevel,
 } from "../trust/policy.ts";
 import { ACCEPTANCE_SUITE_PREFIX } from "../trust/protected-paths.ts";
-import { type Exec, type ExecResult, type GhCause, ghFailure } from "./exec.ts";
-import type { TicketRef } from "../core/run.ts";
+import { ghFailure, type Exec, type ExecResult, type GhCause } from "./exec.ts";
 import {
+	ticketKey,
 	type CommentPost,
 	type FactoryEvent,
 	type LabelWrite,
@@ -21,11 +25,7 @@ import {
 	type TicketReader,
 	type TicketState,
 	type TicketWriter,
-	ticketKey,
 } from "./tickets.ts";
-import { type JsonValue } from "../core/json.ts";
-import { isGitSha, type GitSha, type RepoSlug } from "../workflow.ts";
-import type { Digest } from "../core/run.ts";
 
 export type Login = string & { readonly __brand: "Login" };
 

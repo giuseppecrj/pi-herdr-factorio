@@ -8,7 +8,8 @@ import type {
 } from "./validation.ts";
 import { checkChangedPaths } from "../trust/policy.ts";
 import { digestOf, type Digest, type Verdict } from "../core/run.ts";
-import type { GitSha, RepoSlug } from "../workflow.ts";
+import type { GitSha } from "../config/schema.ts";
+import type { RepoSlug } from "../trust/platform.ts";
 
 export const MAX_REFRESHES = 3;
 export const MAX_GENERATIONS = 6;

@@ -31,7 +31,8 @@ import {
 	EXE_DEV_PLATFORM,
 } from "../trust/platform.ts";
 import { digestOf, type Digest } from "../core/run.ts";
-import { isGitSha, type GitSha, type RepoSlug } from "../workflow.ts";
+import { isGitSha, type GitSha } from "../config/schema.ts";
+import type { RepoSlug } from "../trust/platform.ts";
 import {
 	arrayOf,
 	fieldOf,

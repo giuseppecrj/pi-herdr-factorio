@@ -8,7 +8,9 @@ import {
 	type PlatformProfile,
 	soleRepository,
 } from "../trust/platform.ts";
-import { isGitSha, parseWorkflow, type Exec } from "../workflow.ts";
+import { isGitSha } from "../config/schema.ts";
+import { parseWorkflow } from "../config/parse.ts";
+import type { Exec } from "../github/exec.ts";
 import { execFileSync } from "node:child_process";
 import {
 	arrayOf,
@@ -154,6 +156,15 @@ export async function loadReplayCorpus(dir: string): Promise<ReplayCorpus> {
 	return { v: 1, digest, cases: result };
 }
 
+// Historical layout aliases: a frozen replay corpus can name a source path that a later
+// layout PR moved. Used only when the original path is missing at a revision, and only for
+// guarded symbol lookups. One target per old path; a guard whose symbols moved to two
+// different files cannot be resolved and fails closed.
+const REPLAY_SOURCE_ALIASES: ReadonlyMap<string, string> = new Map([
+	["src/workflow.ts", "src/config/schema.ts"],
+	["src/specify.ts", "src/contract/contract.ts"],
+]);
+
 // Symbol guards compare whole top-level declarations, not just changed lines.
 // Unsupported layouts fail closed rather than silently dropping part of a symbol.
 function guardedSource(source: string, pattern: string): string | null {
@@ -210,10 +221,13 @@ export async function checkReplay(input: {
 				[c.baseSha, input.mainSha].map(async (sha) => {
 					const parts = await Promise.all(
 						c.paths.map(async (path) => {
-							const result = await input.exec("git", [
-								"show",
-								`${sha}:${path}`,
-							]);
+							let result = await input.exec("git", ["show", `${sha}:${path}`]);
+
+							const alias = REPLAY_SOURCE_ALIASES.get(path);
+
+							if (result.code !== 0 && alias !== undefined) {
+								result = await input.exec("git", ["show", `${sha}:${alias}`]);
+							}
 
 							if (result.code !== 0 || c.guardPattern === null) return null;
 

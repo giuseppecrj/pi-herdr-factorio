@@ -1,13 +1,10 @@
-import { isDigest, digestOf, type Digest } from "../core/run.ts";
-import { ACCEPTANCE_SUITE_PREFIX } from "../trust/protected-paths.ts";
-import type { Contract, ContractDigest, CriterionKind } from "../specify.ts";
+import type { GitSha } from "../config/schema.ts";
 import {
-	isGitSha,
-	isRepoSlug,
-	type GitSha,
-	type RepoSlug,
-} from "../workflow.ts";
-import { isContractDigest } from "../specify.ts";
+	parseAcceptanceBinding,
+	type AcceptanceBinding,
+} from "../contract/acceptance.ts";
+import type { Contract, CriterionKind } from "../contract/contract.ts";
+import type { JsonValue } from "../core/json.ts";
 import {
 	arrayOf,
 	countOf,
@@ -17,18 +14,9 @@ import {
 	textOf,
 	textsOf,
 } from "../core/json.ts";
-import type { JsonValue } from "../core/json.ts";
+import { digestOf, isDigest, type Digest } from "../core/run.ts";
+import { ACCEPTANCE_SUITE_PREFIX } from "../trust/protected-paths.ts";
 import type { VisibleTests } from "./build.ts";
-
-export type AcceptanceBinding = Readonly<{
-	runId: Digest;
-	repo: RepoSlug;
-	issue: number;
-	contractDigest: ContractDigest;
-	acceptanceDigest: Digest;
-	baseSha: GitSha;
-	gateSha: GitSha;
-}>;
 
 /**
  * The one accept feedback retry, persisted in the claim once granted, so a
@@ -83,32 +71,6 @@ export function retryPending(
 	reference: AcceptanceQualification,
 ): reference is Extract<AcceptanceQualification, { kind: "retry_pending" }> {
 	return reference.kind === "retry_pending";
-}
-
-export function parseAcceptanceBinding(
-	value: JsonValue | undefined,
-): AcceptanceBinding | null {
-	const v = objectOf(value);
-
-	const runId = textOf(fieldOf(v, "runId")) ?? "",
-		repo = textOf(fieldOf(v, "repo")) ?? "",
-		issue = countOf(fieldOf(v, "issue"));
-
-	const contractDigest = textOf(fieldOf(v, "contractDigest")) ?? "",
-		acceptanceDigest = textOf(fieldOf(v, "acceptanceDigest")) ?? "",
-		baseSha = textOf(fieldOf(v, "baseSha")) ?? "",
-		gateSha = textOf(fieldOf(v, "gateSha")) ?? "";
-
-	return isDigest(runId) &&
-		isRepoSlug(repo) &&
-		issue !== null &&
-		issue > 0 &&
-		isContractDigest(contractDigest) &&
-		isDigest(acceptanceDigest) &&
-		isGitSha(baseSha) &&
-		isGitSha(gateSha)
-		? { runId, repo, issue, contractDigest, acceptanceDigest, baseSha, gateSha }
-		: null;
 }
 
 export function parseBaseCheckReference(

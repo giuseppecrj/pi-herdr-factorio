@@ -219,7 +219,7 @@ Agents use only `factory-verify@<guest-tailnet-name>` with the dedicated key `/h
 **Files.**
 
 - [ ] Edit `src/trust/platform.ts`, `server/sandbox/routes.ts`, `server/sandbox/credentials.ts`, `server/sandbox/gateway-main.ts`, `server/sandbox/gateway-client.ts`, and `server/sandbox/control.ts`.
-- [ ] Edit `server/sandbox.ts`, `server/cli.ts`, and `src/workflow.ts` only to carry the profile and credential references.
+- [ ] Edit `server/sandbox.ts`, `server/cli.ts`, and `src/config/{schema,parse,load,views}.ts` only to carry the profile and credential references.
 - [ ] Edit `test/platform.test.ts`, `test/workflow.test.ts`, and `test/sandbox/*.cases.ts` for the changed contracts.
 - [ ] Edit `docs/operations/platform.md` and `docs/operations/sandbox.md`.
 - [ ] Create `server/vm/ms-a2/factory.service` as the guest-only unit template with `LoadCredential=`. VM5 renders the actual UID and installs it. Leave `server/factory.service`, which `install-exe-dev.sh` copies, unchanged.

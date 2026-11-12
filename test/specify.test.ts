@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { buildPrompt } from "../src/candidate/build.ts";
 import {
 	existsSync,
 	lstatSync,
@@ -12,61 +11,62 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gzipSync } from "node:zlib";
 import { after, describe, it } from "node:test";
+import { gzipSync } from "node:zlib";
 import {
-	checkoutWorkspace,
 	checkoutBuildWorkspace,
 	checkoutOf,
+	checkoutWorkspace,
 	fileRunFiles,
 	ghTarball,
 	readTarball,
 } from "../server/controller.ts";
-import {
-	fileAdmissionStore,
-	type AdmittedReceipt,
-} from "../src/trust/admission.ts";
-import { GitHubTicketWriter } from "../src/github/adapter.ts";
-import type { Exec } from "../src/github/exec.ts";
-import { CONTROLLER_LOGIN, markerLedger } from "../src/trust/markers.ts";
-import type { LogFields } from "../src/orchestrator.ts";
-import { type Digest, digestOf, runIdOf } from "../src/core/run.ts";
-import type { JsonValue } from "../src/core/json.ts";
+import { buildPrompt } from "../src/candidate/build.ts";
+import { type GitSha, isGitSha } from "../src/config/schema.ts";
 import {
 	answersDigestOf,
 	type Contract,
 	contractBytes,
 	contractDigestOf,
+	type Question,
+	questionsDigestOf,
+} from "../src/contract/contract.ts";
+import { parseSpecifyOutput } from "../src/contract/parse.ts";
+import {
+	inlined,
+	namedFiles,
+	renderInlined,
+	reviewPrompt,
+	revisionPrompt,
+	sourceExcerpts,
+	sourceFacts,
+	specifyPrompt,
+	treeOf,
+} from "../src/contract/prompt.ts";
+import {
 	contractKey,
 	contractKeyOf,
 	inert,
-	inlined,
-	sourceExcerpts,
-	sourceFacts,
-	renderInlined,
-	namedFiles,
-	parseSpecifyOutput,
-	type Question,
-	questionsDigestOf,
 	questionsKey,
 	questionsKeyOf,
-	reviewPrompt,
-	revisionPrompt,
 	renderQuestions,
 	renderSummary,
-	specifyPrompt,
-	treeOf,
 	withoutKey,
-} from "../src/specify.ts";
+} from "../src/contract/render.ts";
+import type { JsonValue } from "../src/core/json.ts";
+import { type Digest, digestOf, runIdOf } from "../src/core/run.ts";
+import { GitHubTicketWriter } from "../src/github/adapter.ts";
+import type { Exec } from "../src/github/exec.ts";
+import type { LogFields } from "../src/orchestrator.ts";
 import {
-	type GitSha,
-	isGitSha,
-	isRepoSlug,
-	type RepoSlug,
-} from "../src/workflow.ts";
+	type AdmittedReceipt,
+	fileAdmissionStore,
+} from "../src/trust/admission.ts";
+import { CONTROLLER_LOGIN, markerLedger } from "../src/trust/markers.ts";
+import { isRepoSlug, type RepoSlug } from "../src/trust/platform.ts";
 
-import { withUmask } from "./helpers.ts";
 import { EXE_DEV_PLATFORM } from "../src/trust/platform.ts";
+import { withUmask } from "./helpers.ts";
 
 function slug(text: string): RepoSlug {
 	if (!isRepoSlug(text)) throw new Error(`bad slug ${text}`);

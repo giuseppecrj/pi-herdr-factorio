@@ -1,6 +1,6 @@
 import { digestOf, type Digest } from "../core/run.ts";
 import { PublicationError } from "../github/publish.ts";
-import type { GitSha } from "../workflow.ts";
+import type { GitSha } from "../config/schema.ts";
 import type { JsonValue } from "../core/json.ts";
 import {
 	LEDGER_FILE,
