@@ -65,6 +65,7 @@ import { digestOf, type Digest } from "../../src/core/run.ts";
 import {
 	GitHubTicketAdapter,
 	GitHubTicketWriter,
+	isBotLogin,
 	isLogin,
 	parseOwnedPullRequest,
 	type GitHubFailure,
@@ -505,7 +506,11 @@ export function controllerCandidatePort(config: {
 
 						eligibility =
 							latest.entry.kind === "labeled" &&
+							!(
+								latest.entry.actor.kind === "login" && latest.entry.actor.bot
+							) &&
 							admission.kind === "found" &&
+							!isBotLogin(admission.receipt.actor) &&
 							admission.receipt.baseSha === state.pin.workflowSha
 								? "ready"
 								: "withdrawn";
@@ -1784,7 +1789,7 @@ export async function observeFeedback(input: {
 			...input,
 			events: read.events,
 			permission: async (actor) => {
-				if (!isLogin(actor)) return "read";
+				if (!isLogin(actor) || isBotLogin(actor)) return "read";
 				const permission = await input.adapter.readPermission(actor);
 
 				if (permission.kind === "failed")

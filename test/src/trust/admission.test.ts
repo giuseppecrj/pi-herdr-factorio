@@ -641,6 +641,7 @@ describe("creation-time label", () => {
 
 		github.add(
 			createdWithReady({
+				updatedAt: editedAt,
 				body: `${BODY}\n\nTypo fixed.`,
 				lastEditedAt: editedAt,
 				includesCreatedEdit: true,

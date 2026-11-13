@@ -668,6 +668,50 @@ test("overflow holds read only known-review dismissals, never classify the overf
 	}
 });
 
+test("a bot's change request is refused as unauthorized before any permission read", async () => {
+	const github = new FakeGitHub();
+	github.add(fakeIssue(5));
+	github.permissions.set("other-app[bot]", "write");
+	github.reviews.set(5, [
+		{
+			id: 1,
+			state: "CHANGES_REQUESTED",
+			commit_id: head,
+			body: "fix",
+			submitted_at: "2026-11-07T00:00:00Z",
+			user: { login: "other-app[bot]", type: "Bot" },
+		},
+	]);
+	const root = mkdtempSync(join(tmpdir(), "feedback-"));
+
+	try {
+		const observed = await observeFeedback({
+			controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
+			stateDir: root,
+			adapter: new GitHubTicketAdapter({ exec: github.exec, repo }),
+			runId,
+			pr: 5,
+			head,
+			prHead: head,
+			refHead: head,
+			seen: [],
+		});
+
+		assert.equal(observed.kind, "read");
+		assert.equal(observed.kind === "read" && observed.batch?.actionable, false);
+		assert.deepEqual(observed.kind === "read" ? observed.batch?.seen : null, [
+			id(1),
+		]);
+		assert.equal(
+			github.calls.filter((call) => call.join(" ").includes("collaborators"))
+				.length,
+			0,
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("feedback failures retain their source and failure kind without moving the cursor", async () => {
 	const github = new FakeGitHub();
 	github.add(fakeIssue(5));

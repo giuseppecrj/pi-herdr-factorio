@@ -39,7 +39,7 @@ Before the first PR, complete failing CI or blocking review can use the shared r
 
 ## Submit review feedback
 
-On an open factory PR, the controller reads conversation comments, submitted reviews and each review's inline comments. It classifies each item once. Only a submitted **Request changes** review from an actor with repository write access, reviewing the promoted head, is actionable. Conversation comments, approvals, questions and dismissed reviews do not request repair. The factory ignores its own messages. A failed permission read defers intake rather than treating the author as unauthorized.
+On an open factory PR, the controller reads conversation comments, submitted reviews and each review's inline comments. It classifies each item once. Only a submitted **Request changes** review from an actor with repository write access, reviewing the promoted head, is actionable. A review by a login ending in `[bot]` is refused as unauthorized without a permission read, whatever access the bot has. Conversation comments, approvals, questions and dismissed reviews do not request repair. The factory ignores its own messages. A failed permission read defers intake rather than treating the author as unauthorized.
 
 Intake waits until the PR head, branch ref and promoted certified head agree. A review on a successor being promoted is not consumed as stale. A genuinely old-head review is refused. Inline comments under `test/acceptance/` are refused; their text and diff hunks never enter feedback cards or the private full-text file. The review body is the owner's own text and is forwarded when actionable.
 

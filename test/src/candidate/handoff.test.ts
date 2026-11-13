@@ -190,6 +190,98 @@ test("initial generation captures main before publication and retains pre-candid
 		assert.equal(state.work.request.kind, "validate");
 });
 
+test("the actual observer withdraws a candidate whose ready event a bot applied", async () => {
+	for (const [actor, eligibility] of [
+		[{ login: CONTROLLER_LOGIN, type: "Bot" }, "withdrawn"],
+		[{ login: "renovate", type: "Bot" }, "withdrawn"],
+		[{ login: "giuseppecrj", type: "User" }, "ready"],
+	] as const) {
+		const root = mkdtempSync(join(tmpdir(), "handoff-bot-ready-"));
+
+		try {
+			await fileAdmissionStore(root).record(
+				{
+					repo: pin.repo,
+					issue: pin.issue,
+					issueUrl: `https://github.com/${pin.repo}/issues/${pin.issue}`,
+					decision: "admitted",
+					reasons: [],
+					eventId: "700",
+					eventAt: "2026-10-30T00:00:00Z",
+					actor: actor.login,
+					actorPermission: "write",
+					snapshotDigest: digestOf("snapshot"),
+					snapshotSource: "unedited",
+					baseSha: pin.workflowSha,
+					workflowDigest: pin.workflowDigest,
+				},
+				{ title: "issue", body: "body" },
+			);
+
+			const port = controllerCandidatePort({
+				platform: EXE_DEV_PLATFORM,
+				stateDir: root,
+				exec: async (_command, args) => {
+					const path = args
+						.find((a) => a.startsWith(`repos/${pin.repo}/`))
+						?.slice(`repos/${pin.repo}/`.length);
+
+					const ok = (value: JsonValue) => ({
+						code: 0,
+						stdout: JSON.stringify(value),
+						stderr: "",
+					});
+
+					if (path === `issues/${pin.issue}`)
+						return ok({
+							number: pin.issue,
+							updated_at: "2026-10-30T00:00:00Z",
+							title: "issue",
+							body: "body",
+							state: "open",
+							labels: [{ name: "factory:ready" }],
+							user: { login: "giuseppecrj" },
+						});
+
+					if (path?.startsWith(`issues/${pin.issue}/timeline`))
+						return ok([
+							{
+								id: 700,
+								event: "labeled",
+								created_at: "2026-10-30T00:00:00Z",
+								actor,
+								label: { name: "factory:ready" },
+							},
+						]);
+
+					if (path === "git/ref/heads/main") return ok({ object: { sha } });
+
+					throw new Error(`unexpected ${path}`);
+				},
+			});
+
+			const state = beginCandidate(pin, patch, 1234);
+			const observation = await port.observe(state, 100);
+
+			assert.equal(observation.eligibility, eligibility, actor.login);
+
+			const step = handoffCandidate(state, {
+				...observation,
+				executionAllowed: true,
+				capacityAvailable: true,
+			});
+
+			assert.equal(
+				step.effect?.kind,
+				eligibility === "ready" ? "validate" : "finish_pr",
+				actor.login,
+			);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	}
+});
+
 test("missing main cannot invent an initial certified base", () => {
 	const state = beginCandidate(pin, patch, 1234);
 	assert.deepEqual(

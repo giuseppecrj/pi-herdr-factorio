@@ -252,7 +252,7 @@ export type ClaimObservation =
 	| { readonly kind: "released"; readonly reason: ReleaseReason }
 	| { readonly kind: "unclaimed" };
 
-export type ReleaseReason = "closed" | "unlabeled" | "new_event";
+export type ReleaseReason = "closed" | "unlabeled" | "new_event" | "bot_actor";
 
 export function claimProjection(
 	observation: ClaimObservation,

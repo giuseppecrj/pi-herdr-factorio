@@ -21,6 +21,7 @@ import {
 	type CommentPost,
 	type FactoryEvent,
 	type LabelWrite,
+	type ReadyActor,
 	type Ticket,
 	type TicketReader,
 	type TicketState,
@@ -261,6 +262,11 @@ function idOf(value: JsonValue | undefined): string | null {
 	return id === null || id === 0 ? null : String(id);
 }
 
+/** True for a login GitHub gives an app's bot account, which ends in `[bot]`. */
+export function isBotLogin(login: string): boolean {
+	return login.endsWith("[bot]");
+}
+
 function actorOf(value: JsonValue | undefined): Actor {
 	const login = stringOf(pathOf(value, ["login"]));
 
@@ -268,9 +274,7 @@ function actorOf(value: JsonValue | undefined): Actor {
 		? {
 				kind: "login",
 				login,
-				bot:
-					login.endsWith("[bot]") ||
-					stringOf(pathOf(value, ["type"])) === "Bot",
+				bot: isBotLogin(login) || stringOf(pathOf(value, ["type"])) === "Bot",
 			}
 		: { kind: "withheld" };
 }
@@ -1079,6 +1083,7 @@ export class GitHubTicketAdapter implements TicketReader {
 			at: entry.at,
 			ref: this.ref(issue),
 			actor: entry.actor.login,
+			bot: entry.actor.bot,
 		};
 	}
 
@@ -1137,11 +1142,12 @@ export class GitHubTicketAdapter implements TicketReader {
 		return states;
 	}
 
-	/** False when the login fails GitHub's grammar or the lookup fails. */
-	async canAdmit(_ref: TicketRef, actor: string): Promise<boolean> {
-		if (!isLogin(actor)) return false;
+	/** False for a bot, a login outside GitHub's grammar or a failed lookup. A bot's permission is never read. */
+	async canAdmit(_ref: TicketRef, actor: ReadyActor): Promise<boolean> {
+		if (actor.bot || isBotLogin(actor.login) || !isLogin(actor.login))
+			return false;
 
-		const read = await this.readPermission(actor);
+		const read = await this.readPermission(actor.login);
 
 		return read.kind === "ok" && hasWriteAccess(read.value);
 	}
