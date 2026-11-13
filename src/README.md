@@ -64,6 +64,6 @@ The `owner` field of each entry in `scripts/layout-baseline.json` records the sa
 
 1. Put it beside the code that owns its responsibility. Import owner modules directly. Do not add an index file that re-exports other modules.
 2. Add an entry under `classification.files` in `scripts/layout-baseline.json` with its `owner`, the review `seats` that `reviewSeats` in `src/candidate/review.ts` gives it, `from` (the files it was extracted from, or `[]`) and `since` (the PR that classified it).
-3. Add its tests as `test/<name>.test.ts`. See `test/README.md`.
+3. Add its tests as `test/src/<group>/<name>.test.ts`. See `test/README.md`.
 
 A file extracted from others must keep every review seat its sources required. If `reviewSeats` gives it fewer, widen the review rule in `src/candidate/review.ts` in the same PR.

@@ -29,7 +29,7 @@ node host/cli/index.ts replay check --json \
   --main-sha "$MAIN_SHA" --previous-sha "$PREVIOUS_SHA" \
   --candidate-sha "$CANDIDATE_SHA" > replay-check.json
 TMPDIR=$(mktemp -d "${TMPDIR:-$HOME/.herdr/tmp}/factory-replay.XXXXXX") node --experimental-strip-types \
-  --test --test-concurrency=1 test/replay.test.ts test/integration/replay-driver.test.ts
+  --test --test-concurrency=1 test/src/maintenance/replay.test.ts test/integration/replay-driver.test.ts
 bash -n .pi/skills/verify-factory/scripts/drive-replay.sh
 ```
 

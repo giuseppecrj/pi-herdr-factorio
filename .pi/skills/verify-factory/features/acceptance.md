@@ -49,4 +49,4 @@ Specify turned the issue's three criteria into seven or eight finer ones. All 62
 
 - `lane-setup.sh` deletes the lane's `state`. Running it again after a stage destroys the stored suite. Run the probe from the same lane setup.
 - The probe's `systemctl --user stop` of its scope may report failure because the scope already ended with its process. Check the leftover scope count instead.
-- Recovery and hostile-output cases run in `test/orchestrator.test.ts` and `test/artifacts.test.ts`: invalid or empty output retries and then fails; budget output is dropped with its usage counted; a stored suite is reused after a restart without a new model request; damaged bytes end `failed` with a typed reason and are never regenerated.
+- Recovery and hostile-output cases run in `test/src/controller/orchestrator-*.test.ts` and `test/src/contract/artifacts.test.ts`: invalid or empty output retries and then fails; budget output is dropped with its usage counted; a stored suite is reused after a restart without a new model request; damaged bytes end `failed` with a typed reason and are never regenerated.

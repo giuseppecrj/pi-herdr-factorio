@@ -69,7 +69,7 @@ The table uses Shep token names. CSS uses their kebab-case form, such as `attent
 - Names are `--<tier>-<kebab-name>`. Prefer semantic tokens in page CSS and component tokens where Shep has one, such as `--component-card-*` and `--component-notice-*`.
 - Use tokens only, never raw colours in UI CSS. `transparent`, `currentColor` and `inherit` are fine. Never hand-edit `tokens.css`.
 - Translucent colours use `color-mix` with palette references. Motion maps to CSS easing; unknown shapes or curves fail generation. Honour `prefers-reduced-motion` if motion is added later.
-- `test/design-tokens.test.ts` checks exact generated output and that every variable used by `tokens.css` is defined there. `test/viewer-style.test.ts` guards the viewer stylesheet against raw colours, unknown variables, light-theme switches and uppercase transforms, checks text contrast, and verifies that `/style.css` starts with the tokens.
+- `test/host/viewer/design-tokens.test.ts` checks exact generated output and that every variable used by `tokens.css` is defined there. `test/host/viewer/viewer-style.test.ts` guards the viewer stylesheet against raw colours, unknown variables, light-theme switches and uppercase transforms, checks text contrast, and verifies that `/style.css` starts with the tokens.
 - Biome skips these two files because `tokens.json` is a byte copy of Shep and `tokens.css` is generated; the drift test guards them instead.
 
 ## Typography on the web

@@ -21,4 +21,4 @@ Import the owning implementation directly. Do not add a barrel or a compatibilit
 
 The cadence repository root is two levels above its module. Diagnosis compares a digest for every executable member of `host/gates/`, including the draft reporter, with the controller's own checkout. `MATERIALIZER_FILES` in `host/gates/materialize.ts` names the members. Both readers have entries in `scripts/layout-baseline.json`. Keep those entries and the path map current when moving code.
 
-Characterization and recovery pins are in `test/host-controller.test.ts`; the existing orchestrator, publication, validation, diagnosis, cadence and measurement suites exercise these ports through their callers.
+Characterization and recovery pins are in `test/host/controller/host-controller.test.ts`; the existing orchestrator, publication, validation, diagnosis, cadence and measurement suites exercise these ports through their callers.

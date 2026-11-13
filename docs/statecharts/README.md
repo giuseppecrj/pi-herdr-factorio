@@ -6,6 +6,8 @@ On 2026-11-08, **tla-ts 0.0.8** completed F1 structural and F2 feedback with all
 
 `Journey.tla` describes the shared `handoffCandidate` policy. `Controller.tla` instantiates Journey and adds claim persistence, external effects, captured callbacks, one restart and conditional validation-ref cleanup. It does not introduce another runtime candidate policy. Its legacy property name `NoPostPrRepair` now delegates to the five F10 replacement invariants, not the obsolete prohibition. `journey/Chart.cfg` also needed the replacement property list to keep the presentation check runnable.
 
+L14 maps F4 to `test/src/candidate/handoff.test.ts`, `test/src/controller/orchestrator-validation.test.ts`, and `test/src/github/publication.test.ts`. These files own all 40 correspondence tests. The runner checks actual test registrations for each file and each selected name pattern, and refuses empty file wrappers in its count. The five required F10 witnesses, minimum count and zero-skip assertions remain. Model bytes and historical correspondence claims below are unchanged.
+
 ## Bounds and domains
 
 All substantive configurations retain **6 total generations, 2 shared repairs, 3 run-wide refreshes and 3 issued review attempts per repair round**. A generation number is `0..3` within its round. The separate sequence index identifies one of the six retained entries. Early stages are a coarse prefix; their retry-5 behavior is checked by the actual runtime tests, not the structural partition.

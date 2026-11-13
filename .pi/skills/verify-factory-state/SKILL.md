@@ -19,7 +19,7 @@ The last recorded runtime correspondence revision is `3c62fc7`. Do not treat the
 | `src/candidate/stages.ts` | Public `advance` delegates candidate policy to `handoffCandidate` |
 | `src/controller/orchestrator.ts`, `src/controller/recovery.ts` | Persisted intent, effect interpretation, captured callback, and restart recovery. `recovery.ts` turns an unsettled execution account back into its candidate event |
 | `src/github/publish.ts`, `host/controller/validation-sweep.ts`, `host/controller/candidate-port.ts` | Publication, non-force promotion, CI deadlines, and owned ref cleanup |
-| `test/handoff.test.ts`, `test/orchestrator.test.ts`, `test/publication.test.ts` | Runtime correspondence through the named F4 runner |
+| `test/src/candidate/handoff.test.ts`, `test/src/controller/orchestrator-validation.test.ts`, `test/src/github/publication.test.ts` | Runtime correspondence through the named F4 runner |
 
 The configs retain six total generations, two shared repairs, three run-wide refreshes, and three issued review attempts per round. Abstract review, repair, and run quotas are 3, 3, and 8. Usage classes are 0 and 1, with prior usage 1. These are not substitutes for real token caps. Controller transport represents one restart and one fixed cleanup-focus generation per behavior, not concurrent cleanup of all refs.
 
@@ -92,7 +92,7 @@ F3 deliberately checks four false invariants. Require exit 12, the named invaria
 
 Inspect the final states, not just the exit. Witness queues need not drain. Each run has a 300-second bound.
 
-F4 is the named-test correspondence runner, not a generic trace decoder. Require exit 0, at least 40 selected tests, all passing, zero skips, all five F10 replays, the six-generation trace, saved-intent restart, and unexpected-predecessor refusal. It calls the real reducer and public `advance`. F4 remains required independently of a model pass. Run the ordinary project checks separately.
+F4 is the named-test correspondence runner, not a generic trace decoder. Its mapped files own 40 real tests. Every selected file must contribute a registered test, and each selected name pattern must match a test in its file. Empty file wrappers cannot count. Require exit 0, at least 40 selected tests, all passing, zero skips, all five F10 replays, the six-generation trace, saved-intent restart, and unexpected-predecessor refusal. It calls the real reducer and public `advance`. F4 remains required independently of a model pass. Run the ordinary project checks separately.
 
 ### F2 is historical completed evidence
 

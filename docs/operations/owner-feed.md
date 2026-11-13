@@ -130,7 +130,7 @@ The kinds are `question_asked`, `question_answered`, `spec_review`, `pr_review`,
 
 ## Change rules
 
-The code states no rule for evolving the feed. `version` is a literal `1` (`src/views/feed.ts:55`). The golden test compares the whole feed with `test/fixtures/owner-feed/feed-v1.json` using `deepEqual` (`test/feed.test.ts`, first test), so any added or removed field fails it until a person edits the fixture. That makes a change visible. It does not say which changes are allowed.
+The code states no rule for evolving the feed. `version` is a literal `1` (`src/views/feed.ts:55`). The golden test compares the whole feed with `test/fixtures/owner-feed/feed-v1.json` using `deepEqual` (`test/src/views/feed.test.ts`, first test), so any added or removed field fails it until a person edits the fixture. That makes a change visible. It does not say which changes are allowed.
 
 **Proposal.** This rule matches how the feed is built today.
 
@@ -165,14 +165,14 @@ The feed keeps one run per issue. When an issue has several claims, `readAttenti
 Use these keys:
 
 - **Collapse key.** `repo` plus `issue`. One key per issue means a run that moves from `question_asked` to `question_answered`, or fails and restarts, replaces its earlier notification.
-- **Change test.** Compare the decision fingerprint, the three fields `kind`, `runId` and `reason`, between two reads of the same key. `reason` carries the hold reason (`src/views/attention.ts:632`). Two holds on one run, such as `disabled` and then `run_tokens`, keep the same `kind`, `group` and `runId` and differ only in `reason`. `test/feed.test.ts` has a case that changes only the `claim_unverified` reason of one run between two reads.
+- **Change test.** Compare the decision fingerprint, the three fields `kind`, `runId` and `reason`, between two reads of the same key. `reason` carries the hold reason (`src/views/attention.ts:632`). Two holds on one run, such as `disabled` and then `run_tokens`, keep the same `kind`, `group` and `runId` and differ only in `reason`. `test/src/views/feed.test.ts` has a case that changes only the `claim_unverified` reason of one run between two reads.
 - **Tap target.** `prUrl` when it is not null, otherwise `issueUrl`. The CLI's text report picks the same way (`src/views/attention.ts:693`).
 
 An issue in `unreadable` has no entry. Its key is still `repo` plus `issue`.
 
 ### Known limit, one issue can appear twice
 
-Reproduced on 2026-11-10. An older run of an issue can still be listed in `status.json` under `unverifiedClaims`. When the issue also has a newer run, the feed has two entries for the issue. The second has `kind: "blocked"`, `eventId: ""`, `title: "Title unavailable"` and `reason: "claim_unverified:issue"`. It also adds one to `counts.blocked` (`src/views/attention.ts:655`, `src/views/feed.ts:572` to `src/views/feed.ts:594`). The bridge must apply the collapse key to both entries. The empty-`eventId` entry can be the newer run. `test/attention.test.ts:623` builds that case, where the held run has `eventId` 2 and the listed claim is its predecessor. The feed discards the hold's event id (`src/views/feed.ts:572` to `src/views/feed.ts:581`), so v1 cannot tell which of the two entries is newer. Do not select the latest run. Keep the attention signal instead. If either entry for a key has `group: "needs_you"`, the key needs the owner. Take the fingerprint of a key with two entries as the set of fingerprints of its `needs_you` entries. This is a product defect, reported and not fixed.
+Reproduced on 2026-11-10. An older run of an issue can still be listed in `status.json` under `unverifiedClaims`. When the issue also has a newer run, the feed has two entries for the issue. The second has `kind: "blocked"`, `eventId: ""`, `title: "Title unavailable"` and `reason: "claim_unverified:issue"`. It also adds one to `counts.blocked` (`src/views/attention.ts:655`, `src/views/feed.ts:572` to `src/views/feed.ts:594`). The bridge must apply the collapse key to both entries. The empty-`eventId` entry can be the newer run. `test/src/views/attention.test.ts:623` builds that case, where the held run has `eventId` 2 and the listed claim is its predecessor. The feed discards the hold's event id (`src/views/feed.ts:572` to `src/views/feed.ts:581`), so v1 cannot tell which of the two entries is newer. Do not select the latest run. Keep the attention signal instead. If either entry for a key has `group: "needs_you"`, the key needs the owner. Take the fingerprint of a key with two entries as the set of fingerprints of its `needs_you` entries. This is a product defect, reported and not fixed.
 
 ## Actions
 
@@ -244,4 +244,4 @@ To regenerate them, run the generator. It formats its own output with Biome, so 
 node --experimental-strip-types test/fixtures/owner-feed/capture.ts
 ```
 
-`test/feed.test.ts` regenerates each capture in a temporary directory and fails when it differs from the file, when a capture is not a valid v1 feed, or when the set stops covering every kind except `spec_review`.
+`test/src/views/feed.test.ts` regenerates each capture in a temporary directory and fails when it differs from the file, when a capture is not a valid v1 feed, or when the set stops covering every kind except `spec_review`.

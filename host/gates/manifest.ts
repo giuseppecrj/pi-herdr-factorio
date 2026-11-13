@@ -215,7 +215,7 @@ export function manifestOf(tree: string): GateManifest {
 		new Set(testGlobs).size !== testGlobs.length ||
 		testGlobs.some(
 			(p) =>
-				!/^test\/(?:\*\.test\.ts|sandbox\/\*\.cases\.ts|integration\/\*\.test\.ts)$/.test(
+				!/^test\/(?:(?:src|host)\/\*\*\/\*\.test\.ts|integration\/\*\.test\.ts)$/.test(
 					p,
 				),
 		)
@@ -254,5 +254,5 @@ export function manifestOf(tree: string): GateManifest {
 	)
 		throw new Error("missing_checks");
 
-	return { checks, tests: tests.filter((p) => !p.endsWith(".cases.ts")) };
+	return { checks, tests };
 }
