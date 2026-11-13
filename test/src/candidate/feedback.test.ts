@@ -584,6 +584,52 @@ test("C9 a review edit after an uncertain proposal POST reuses the original inte
 	}
 });
 
+for (const [login, type] of [
+	["other-app[bot]", "Bot"],
+	["renovate", "Bot"],
+	["writer", "User"],
+] as const) {
+	test(`a merged-PR review by ${login} typed ${type} ${type === "Bot" ? "proposes nothing and reads no permission" : "proposes one follow-up"}`, async () => {
+		const github = new FakeGitHub();
+		github.pulls.set(5, { merged_at: "2026-11-06T00:00:00Z" });
+		github.permissions.set(login, "write");
+		github.reviews.set(5, [
+			{
+				id: 3,
+				state: "COMMENTED",
+				commit_id: head,
+				body: "follow up on this",
+				submitted_at: "2026-11-07T00:00:00Z",
+				user: { login, type },
+			},
+		]);
+		const root = mkdtempSync(join(tmpdir(), "feedback-"));
+
+		try {
+			const input = {
+				platform: EXE_DEV_PLATFORM,
+				stateDir: root,
+				repo,
+				exec: github.exec,
+				now: 0,
+				landed: [{ runId, pr: 5 }],
+			};
+
+			await sweepMergedFeedback(input);
+			await sweepMergedFeedback({ ...input, now: 3_600_001 });
+
+			assert.equal(github.issues.size, type === "User" ? 1 : 0);
+			assert.equal(
+				github.calls.filter((call) => call.join(" ").includes("collaborators"))
+					.length,
+				type === "User" ? 1 : 0,
+			);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+}
+
 test("head binding defers without reading any feedback source or permission", async () => {
 	const github = new FakeGitHub();
 	const root = mkdtempSync(join(tmpdir(), "feedback-"));
@@ -711,6 +757,58 @@ test("a bot's change request is refused as unauthorized before any permission re
 		rmSync(root, { recursive: true, force: true });
 	}
 });
+
+for (const [login, type] of [
+	["renovate", "Bot"],
+	["writer", "User"],
+] as const) {
+	test(`a change request by ${login} typed ${type} is ${type === "Bot" ? "refused before any permission read" : "actionable after one permission read"}`, async () => {
+		const github = new FakeGitHub();
+		github.add(fakeIssue(5));
+		github.permissions.set(login, "write");
+		github.reviews.set(5, [
+			{
+				id: 1,
+				state: "CHANGES_REQUESTED",
+				commit_id: head,
+				body: "fix",
+				submitted_at: "2026-11-07T00:00:00Z",
+				user: { login, type },
+			},
+		]);
+		const root = mkdtempSync(join(tmpdir(), "feedback-"));
+
+		try {
+			const observed = await observeFeedback({
+				controllerLogin: EXE_DEV_PLATFORM.controllerLogin,
+				stateDir: root,
+				adapter: new GitHubTicketAdapter({ exec: github.exec, repo }),
+				runId,
+				pr: 5,
+				head,
+				prHead: head,
+				refHead: head,
+				seen: [],
+			});
+
+			assert.equal(observed.kind, "read");
+			assert.equal(
+				observed.kind === "read" && observed.batch?.actionable,
+				type === "User",
+			);
+			assert.deepEqual(observed.kind === "read" ? observed.batch?.seen : null, [
+				id(1),
+			]);
+			assert.equal(
+				github.calls.filter((call) => call.join(" ").includes("collaborators"))
+					.length,
+				type === "User" ? 1 : 0,
+			);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+}
 
 test("feedback failures retain their source and failure kind without moving the cursor", async () => {
 	const github = new FakeGitHub();

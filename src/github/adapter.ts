@@ -262,6 +262,11 @@ function idOf(value: JsonValue | undefined): string | null {
 	return id === null || id === 0 ? null : String(id);
 }
 
+/** A submitted review. `bot` is true when GitHub typed its author `Bot` or the login ends in `[bot]`. */
+export type PullReview = Extract<FeedbackEvent, { kind: "review" }> & {
+	readonly bot: boolean;
+};
+
 /** True for a login GitHub gives an app's bot account, which ends in `[bot]`. */
 export function isBotLogin(login: string): boolean {
 	return login.endsWith("[bot]");
@@ -763,13 +768,11 @@ export class GitHubTicketAdapter implements TicketReader {
 		return { kind: "ok", value: records };
 	}
 
-	async readPullReviews(
-		pr: number,
-	): Promise<Read<Extract<FeedbackEvent, { kind: "review" }>[]>> {
+	async readPullReviews(pr: number): Promise<Read<PullReview[]>> {
 		const read = await this.#pages(`pulls/${pr}/reviews`);
 
 		if (read.kind === "failed") return read;
-		const reviews: Extract<FeedbackEvent, { kind: "review" }>[] = [];
+		const reviews: PullReview[] = [];
 
 		for (const item of read.value) {
 			const v = objectOf(item);
@@ -806,6 +809,7 @@ export class GitHubTicketAdapter implements TicketReader {
 				commit,
 				body,
 				comments: [],
+				bot: isBotLogin(actor) || stringOf(pathOf(v?.user, ["type"])) === "Bot",
 			});
 		}
 

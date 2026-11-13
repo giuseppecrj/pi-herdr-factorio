@@ -1677,7 +1677,11 @@ async function feedbackEvents(
 	seen: readonly FeedbackId[],
 	controllerLogin: string,
 ): Promise<
-	| Readonly<{ kind: "read"; events: readonly FeedbackEvent[] }>
+	| Readonly<{
+			kind: "read";
+			events: readonly FeedbackEvent[];
+			bots: ReadonlySet<string>;
+	  }>
 	| Extract<FeedbackObservation, { kind: "unavailable" }>
 > {
 	const comments = await adapter.readComments(pr);
@@ -1697,9 +1701,12 @@ async function feedbackEvents(
 			failure: reviews.failure.kind,
 		};
 	const events: FeedbackEvent[] = [];
+	const bots = new Set<string>();
 
 	for (const c of comments.value) {
 		if (c.author === null) continue;
+
+		if (c.author.type === "Bot") bots.add(c.author.login.toLowerCase());
 		events.push({
 			kind: "conversation",
 			id: feedbackId(adapter.repo, "issue-comment", Number(c.id)),
@@ -1711,6 +1718,8 @@ async function feedbackEvents(
 	}
 
 	for (const r of reviews.value) {
+		if (r.bot) bots.add(r.actor.toLowerCase());
+
 		if (
 			seen.includes(r.id) ||
 			r.actor.toLowerCase() === controllerLogin.toLowerCase()
@@ -1733,7 +1742,7 @@ async function feedbackEvents(
 		events.push({ ...r, comments: inline.value });
 	}
 
-	return { kind: "read", events };
+	return { kind: "read", events, bots };
 }
 
 export async function observeFeedback(input: {
@@ -1789,7 +1798,12 @@ export async function observeFeedback(input: {
 			...input,
 			events: read.events,
 			permission: async (actor) => {
-				if (!isLogin(actor) || isBotLogin(actor)) return "read";
+				if (
+					!isLogin(actor) ||
+					isBotLogin(actor) ||
+					read.bots.has(actor.toLowerCase())
+				)
+					return "read";
 				const permission = await input.adapter.readPermission(actor);
 
 				if (permission.kind === "failed")
@@ -1952,7 +1966,8 @@ async function sweepMergedPr(
 			review.actor.toLowerCase() ===
 				input.platform.controllerLogin.toLowerCase() ||
 			Date.parse(review.at) <= Date.parse(mergedAt) ||
-			!isLogin(review.actor)
+			!isLogin(review.actor) ||
+			review.bot
 		)
 			continue;
 		const permission = await adapter.readPermission(review.actor);

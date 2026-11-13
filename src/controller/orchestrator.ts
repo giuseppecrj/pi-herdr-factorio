@@ -1071,6 +1071,7 @@ export class Orchestrator {
 			readonly eventAt: string;
 			readonly seq: number;
 		},
+		recordedBot = false,
 	): ClaimObservation {
 		const latest = latestReadyEntry(timeline);
 
@@ -1082,7 +1083,7 @@ export class Orchestrator {
 		const { entry } = latest;
 
 		if (entry.kind === "labeled" && entry.id === event.eventId) {
-			return entry.actor.kind === "login" && entry.actor.bot
+			return recordedBot || (entry.actor.kind === "login" && entry.actor.bot)
 				? { kind: "released", reason: "bot_actor" }
 				: this.#confirmedBy(event);
 		}
@@ -2206,9 +2207,19 @@ export class Orchestrator {
 				this.#unverifiedBy("timeline", timeline.failure),
 			);
 
+		const stored = await this.#input.store.read({
+			repo: this.#input.repo,
+			issue: marker.issue,
+			eventId: marker.eventId,
+		});
+
 		return this.#observeClaim(
 			marker,
-			this.#timelineObservation(timeline.value, marker),
+			this.#timelineObservation(
+				timeline.value,
+				marker,
+				stored.kind === "found" && isBotLogin(stored.receipt.actor),
+			),
 		);
 	}
 

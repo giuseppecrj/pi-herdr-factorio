@@ -9,6 +9,7 @@ import { writeStatus } from "../../../host/controller/state.ts";
 import { Orchestrator } from "../../../src/controller/orchestrator.ts";
 import { digestOf } from "../../../src/core/run.ts";
 import { admitTicket } from "../../../src/trust/admission.ts";
+import type { JsonValue } from "../../../src/core/json.ts";
 import {
 	BOT_LOGIN,
 	FAKE_REPO,
@@ -2040,4 +2041,77 @@ describe("Orchestrator admissions recorded for a bot-applied ready event", () =>
 			assert.equal(ctx.files.claims.get(runOf(14))?.status, "released");
 		});
 	}
+
+	for (const actor of [null, { login: "ghost", type: "User" }]) {
+		const shown = actor === null ? "withheld" : "ghost";
+
+		it(`releases a marked blocked claim recorded for ${BOT_LOGIN} when the timeline actor reads ${shown}`, async () => {
+			const ctx = world();
+			const issue = ctx.github.add(labeled(14));
+
+			await ctx.start().tick();
+			assert.deepEqual(statuses(ctx.github, 14), ["1:claimed", "2:blocked"]);
+			const launched = ctx.executor.launches.length;
+
+			botApplied(ctx, issue, BOT_LOGIN);
+			issue.timeline = [readyEventBy(actor)];
+			ctx.executor.fallback = { kind: "hang" };
+			ctx.clock.t += 30_000;
+
+			const report = await ctx.start().tick();
+
+			assert.deepEqual(report.runs, []);
+			assert.equal(ctx.executor.launches.length, launched);
+			assert.deepEqual(statuses(ctx.github, 14), [
+				"1:claimed",
+				"2:blocked",
+				"3:released",
+			]);
+			assert.deepEqual(
+				ctx.logs.flatMap((entry) =>
+					entry.event === "claim_released" ? [entry.fields.why] : [],
+				),
+				["bot_actor"],
+			);
+
+			ctx.clock.t += 30_000;
+			await ctx.start().tick();
+			assert.equal(ctx.executor.launches.length, launched);
+			assert.equal(statuses(ctx.github, 14).length, 3);
+		});
+
+		it(`still resumes a marked blocked claim a human applied when the timeline actor reads ${shown}`, async () => {
+			const ctx = world();
+			const issue = ctx.github.add(labeled(14));
+
+			await ctx.start().tick();
+			assert.deepEqual(statuses(ctx.github, 14), ["1:claimed", "2:blocked"]);
+			const launched = ctx.executor.launches.length;
+
+			issue.timeline = [readyEventBy(actor)];
+			ctx.executor.fallback = { kind: "hang" };
+			ctx.clock.t += 30_000;
+
+			const report = await ctx.start().tick();
+
+			assert.deepEqual(runIssues(report), [14]);
+			assert.equal(ctx.executor.launches.length, launched + 1);
+			assert.ok(
+				!statuses(ctx.github, 14).some((status) =>
+					status.endsWith(":released"),
+				),
+			);
+		});
+	}
 });
+
+/** Issue 14's ready event as GitHub returns it with a withheld (`null`) or deleted actor. */
+function readyEventBy(actor: JsonValue): JsonValue {
+	return {
+		id: EVENT_ID + 14,
+		event: "labeled",
+		actor,
+		created_at: LABEL_AT,
+		label: { name: "factory:ready", color: "ededed" },
+	};
+}
