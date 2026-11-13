@@ -100,22 +100,43 @@ export const REDACTED_PATH = "[redacted]";
 /** One logged path segment that held a loaded secret. */
 export const REDACTED_SEGMENT = "~redacted~";
 
-/** The path with `%XX` escapes decoded and every `/` and `\` removed. */
-function joinedPath(path: string): string {
-	return path
-		.replace(/%([0-9A-Fa-f]{2})/g, (_, hex: string) =>
+const DECODE_ROUNDS = 4;
+
+/** The path with `%XX` escapes decoded until none is left, at most four times. */
+function decodedPath(path: string): string {
+	let text = path;
+
+	for (let round = 0; round < DECODE_ROUNDS; round += 1) {
+		const next = text.replace(/%([0-9A-Fa-f]{2})/g, (_, hex: string) =>
 			String.fromCharCode(Number.parseInt(hex, 16)),
-		)
-		.replace(/[/\\]/g, "");
+		);
+
+		if (next === text) break;
+
+		text = next;
+	}
+
+	return text;
+}
+
+/**
+ * The decoded path with its separators removed: once without `/` and `\`,
+ * and once also without `?`, `.` and `#`. The first keeps a secret that
+ * holds a dot whole.
+ */
+function joinedPaths(path: string): string[] {
+	const plain = decodedPath(path);
+
+	return [plain.replace(/[/\\]/g, ""), plain.replace(/[/\\?.#]/g, "")];
 }
 
 /**
  * The path as logged: the query becomes `?…`, every segment `isSecret`
  * flags becomes `~redacted~`, the path is cut to 128 bytes, and every byte
  * outside `[A-Za-z0-9._~/%-]` becomes `_`. When a secret shows only once
- * the path is decoded and its separators removed, as when a `/` or `%2f`
- * splits it, the whole path becomes `[redacted]`; the gateway logs the
- * route's template instead.
+ * the path is decoded and its separators removed, as when a `/`, `%2f`,
+ * `%3f`, `%2e`, a dot segment or a fragment splits it, the whole path
+ * becomes `[redacted]`; the gateway logs the route's template instead.
  */
 export function redactPath(
 	target: string,
@@ -129,7 +150,7 @@ export function redactPath(
 		.map((segment) => (isSecret(segment) ? REDACTED_SEGMENT : segment))
 		.join("/");
 
-	if (isSecret(kept) || isSecret(joinedPath(kept))) return REDACTED_PATH;
+	if (isSecret(kept) || joinedPaths(kept).some(isSecret)) return REDACTED_PATH;
 
 	const safe = kept.replace(/[^A-Za-z0-9._~/%-]/g, "_").slice(0, PATH_MAX);
 

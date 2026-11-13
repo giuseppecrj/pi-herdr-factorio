@@ -1121,6 +1121,27 @@ describe("gateway credential engine against the echo fixture", () => {
 		assert.equal(h.audit.length, lines + 2);
 	});
 
+	it("keeps neither half of a secret split by %3f or %2e, admitted or denied as ambiguous", async () => {
+		const head = ECHO_SECRET.slice(0, 16);
+		const tail = ECHO_SECRET.slice(16);
+
+		for (const [path, decision] of [
+			[`/plain/api/${head}%3f${tail}`, "forward"],
+			[`/plain/api/${head}%2e${tail}`, "forward"],
+			[`/plain/api/${head}/../${tail}`, "deny"],
+			[`/plain/api/${head}%252e${tail}`, "deny"],
+		] as const) {
+			await call(h.socketPath, "GET", path);
+
+			const line = h.audit.at(-1);
+			const logged = line?.path ?? "";
+
+			assert.equal(line?.decision, decision, path);
+			assert.equal(logged.includes(head), false, logged);
+			assert.equal(logged.includes(tail), false, logged);
+		}
+	});
+
 	it("fails closed on an encoded reflection the sandbox could still decode", async () => {
 		for (const path of [
 			"/echo/api/reflect-json-escape",
