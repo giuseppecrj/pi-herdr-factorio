@@ -72,6 +72,8 @@ The hostname is the security boundary, not the mount path. Other apps on the sam
 
 Failed and budget-stopped rows stay visible until a newer admission event supersedes them; they do not age out of their attention groups. Done recently alone has a seven-day window. For older terminal history, use a known run ID; there is no all-history index.
 
+Production is `nubl-factory`, held and restricted to routine read-only access. `pi-factorio` was retired and deleted on 2026-11-13 (#734), with its state archived. Starting a viewer and exposing private state require the owner's explicit grant.
+
 The VM has no tailnet. On a tailnet machine, keep an SSH tunnel to the VM's loopback viewer, then publish that local tunnel port. Under the owner's exposure grant:
 
 ```bash
@@ -81,7 +83,7 @@ node host/cli/index.ts viewer --state-dir /home/exedev/factory-state --port 8090
 
 # Tailnet machine; keep this process running
 SSH_AUTH_SOCK=$HOME/.ssh/headless-agent.sock ssh -N \
-  -L 127.0.0.1:8090:127.0.0.1:8090 exedev@pi-factorio.exe.xyz
+  -L 127.0.0.1:8090:127.0.0.1:8090 exedev@nubl-factory.exe.xyz
 
 tailscale serve --bg --https=443 --set-path=/factory/ http://127.0.0.1:8090
 ```

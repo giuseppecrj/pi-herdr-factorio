@@ -971,7 +971,9 @@ For a fresh exe.dev VM, use the [commit-pinned, held install](install-exe-dev.md
 
 Installation requires explicit service/VM authority, a drained rollout, and the [owner bootstrap gates](human-review.md#bootstrap-and-enable-protection-as-the-owner). These examples are not an execution grant.
 
-`host/install/factory.service` runs `serve` under systemd. `host/install/provision.sh` does not install it. To install it on `pi-factorio`:
+Production is now `nubl-factory`, held at `3ee264c`. `pi-factorio` was retired and deleted on 2026-11-13 (#734), with its state archived. Routine production access is read-only; upgrades, bridge installation, the hold-lift and fixture runs each need Giuseppe's explicit go.
+
+`host/install/factory.service` runs `serve` under systemd. `host/install/provision.sh` does not install it. For an explicitly authorized manual installation on an exe.dev host:
 
 1. Clone the repository to `/home/exedev/pi-herdr-factorio` at the `main` commit to run, and run `npm ci --ignore-scripts` there.
 2. Run full provisioning: `bash host/install/provision.sh`. This writes the required `/etc/factory/factory.env` and installs the sandbox bundle. A missing env file stops the unit from starting; sandbox-only provisioning does not write it.
@@ -980,7 +982,7 @@ Installation requires explicit service/VM authority, a drained rollout, and the 
 5. Start it: `sudo systemctl enable --now factory.service`.
 6. Wait for readiness: `journalctl -u factory.service -f` until it shows `event=controller_ready`.
 
-For an existing exe.dev host such as `pi-factorio`, run full provisioning from the new checkout before installing the new unit. Otherwise the controller will not start when `/etc/factory/factory.env` is absent.
+For an authorized upgrade of an existing exe.dev host such as `nubl-factory`, run full provisioning from the new checkout before installing the new unit. Otherwise the controller will not start when `/etc/factory/factory.env` is absent.
 
 The unit reads `GH_HOST` and `FACTORY_PLATFORM` from `/etc/factory/factory.env`, generated from `platform --env` by full provisioning. On exmach only, that file also sets the nonsecret `GH_ENTERPRISE_TOKEN=exmach` placeholder; exe-dev gains no GitHub token. It sets `XDG_RUNTIME_DIR=/run/user/1000`, which the stage scopes need, and passes `--state-dir` explicitly. It holds no secret in its environment. Without the sandbox bundle every run stays `blocked`. `systemctl stop factory.service` sends SIGTERM and waits up to 300 seconds for the tick to finish. The unit restarts on failure after 30 seconds, except after exit 2, when another controller holds the lock. To stop dispatch without stopping the service, create `/home/exedev/factory-state/disabled`.
 

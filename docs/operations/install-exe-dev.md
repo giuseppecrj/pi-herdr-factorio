@@ -2,7 +2,7 @@
 
 Giuseppe creates `nubl-factory` from `boldsoftware/exeuntu` and installs the Shep bridge first. Run Factorio's installer as `exedev` (uid 1000, home `/home/exedev`, passwordless sudo), not as root. This is the default `exe-dev` platform; the installer refuses an existing `/etc/factory/platform.json` and never writes one.
 
-This installs a **held** controller, not a cutover. Retiring `pi-factorio`, copying production state, enabling dispatch and phone verification are separate owner operations (#734). A hold blocks new dispatch, not observation of existing runs.
+This installs a **held** controller, not a cutover. `pi-factorio` was retired and deleted on 2026-11-13 (#734), with its state archived. Production is now `nubl-factory`, held at `3ee264c`. Routine access is read-only; upgrades, bridge installation, enabling dispatch and fixture runs each need Giuseppe's explicit go. A hold blocks new dispatch, not observation of existing runs.
 
 ## Attach integrations
 
@@ -104,6 +104,8 @@ FACTORY_VM=nubl-factory "$S/vm.sh" "$S/doctor.sh"
 This selects `exedev@nubl-factory.exe.xyz` and `github.int.exe.xyz`. The doctor reports tool versions and a repository read; it does not lift the hold. The separate repository rename must update the doctor's legacy repository probe too.
 
 ## Hold and upgrade
+
+Provisioning installs exactly `NODE_VERSION` through mise, currently Node 26.12.1. An upgrade downgrades a host with a newer Node to `NODE_VERSION`; it does not refuse the newer version before provisioning. `nubl-factory` currently runs Node 26.13.1, so its next upgrade switches it to 26.12.1. Giuseppe must acknowledge that downgrade before the coordinator upgrades production.
 
 Only Giuseppe decides when to remove `/home/exedev/factory-state/disabled`, after the old controller is drained/stopped and cutover verification is complete. This installer never removes it and never creates or deletes `factory:enabled`.
 

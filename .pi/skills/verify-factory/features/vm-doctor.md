@@ -1,6 +1,6 @@
 # VM doctor
 
-The doctor shows that the selected target VM (`FACTORY_VM`, default `pi-factorio`) is reachable, has the pinned tools, and can read the repository through that target's GitHub host from `targets.env`.
+The doctor shows that the explicitly selected `FACTORY_VM` is reachable, reports tool versions, and can read the repository through that target's GitHub host from `targets.env`. There is no default target. `nubl-factory` is held production; routine access is read-only. `pi-factorio` was retired and deleted on 2026-11-13 (#734), with its state archived.
 
 ## Sub-features
 
@@ -17,6 +17,7 @@ The doctor shows that the selected target VM (`FACTORY_VM`, default `pi-factorio
 Preconditions:
 
 - The headless agent socket exists at `$HOME/.ssh/headless-agent.sock`.
+- Set `FACTORY_VM=nubl-factory` for a production read. Follow [the target restrictions](../SKILL.md#target).
 
 - **Run doctor.** `.pi/skills/verify-factory/scripts/vm.sh .pi/skills/verify-factory/scripts/doctor.sh`. Exit code 0. Output starts with `target=<name>` and has `node=v26.`, `pi=1.4.0`, `herdr=herdr 0.9.5`, `repo=nublai/pi-herdr-factorio default=main`, and `doctor=ok`.
 - **Reconcile versions.** Compare with `PI_VERSION` and `HERDR_VERSION` in `host/install/provision.sh`. They match.

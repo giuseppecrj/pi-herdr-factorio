@@ -621,6 +621,7 @@ describe("exe.dev installer pure and isolated helpers (never a real install)", (
 			assert.ok(filter);
 
 			for (const input of [
+				"",
 				JSON.stringify(valid),
 				"{}",
 				"null",

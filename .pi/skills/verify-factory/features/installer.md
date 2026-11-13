@@ -14,7 +14,7 @@ Use `host/install/install-exe-dev.sh` and [the installer runbook](../../../../do
 
 The layout program requires separate grants for the fixture repository, its two-field configuration derivation, integration, VM lifecycle, install, upgrade, recovery, and cleanup. See [the fixture prerequisites](../../../../docs/plans/later/codebase-layout.md#disposable-fixture-setup-is-a-real-prerequisite). At this base, `--repo` alone cannot make a fixture installation work. The derived revision must allow the fixture repository in the platform defaults and its trusted main workflow. Record product and fixture SHAs and prove all other blobs identical.
 
-Keep `nubl-factory` empty throughout L00 to L15. Reads there begin only after the owner's post-program fresh held install. `pi-factorio` is retiring and is never an install or upgrade target for these lanes.
+`nubl-factory` is held production. Routine access is read-only; upgrades, bridge installation, the hold-lift and fixture runs each need Giuseppe's explicit go. Never run these disposable installation lanes there. `pi-factorio` was retired and deleted on 2026-11-13 (#734), with its state archived.
 
 ## Driving it with the named tooling
 
@@ -85,4 +85,4 @@ For an authorized provisioning failure after stop, require the hold retained, no
 - Dirty, symlinked, wrong-origin checkouts and an existing `/etc/factory/platform.json` refuse. Do not erase local work or platform configuration to force a pass.
 - The installer never removes `disabled` or changes `factory:enabled`. A hold blocks launches but permits existing-run observation and terminal bookkeeping.
 - Keep redacted commands, timestamps, product/fixture SHAs, exact configuration diffs, before/after identities, output, and exit status in the private trail. Close any authorized fixtures and confirm CLOSED. Stop owned test processes and remove disposable infrastructure only under the cleanup grant.
-- The older install runbook's `FACTORY_VM=nubl-factory` doctor example is not authority to connect during the layout program. Read `../SKILL.md` for the target restriction and Arm discrepancy.
+- The runbook's `FACTORY_VM=nubl-factory` doctor example is read-only, not installation authority. Read `../SKILL.md` for production target restrictions.

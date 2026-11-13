@@ -4,7 +4,7 @@
 
 ## Baseline preconditions
 
-Read [the skill's target restrictions](../SKILL.md#target) first. During the layout program, `pi-factorio` permits only Arm and L15 reads, never a lane upload or controller. `nubl-factory` stays empty. The legacy lane commands below apply only under separate authorized target and fixture grants. Installer lanes use the explicit disposable target in `installer.md`.
+Read [the skill's target restrictions](../SKILL.md#target) first. `pi-factorio` was retired and deleted on 2026-11-13 (#734), with its state archived. `nubl-factory` is held production and permits routine read-only checks only. Upgrades, bridge installation, the hold-lift and fixture runs each need Giuseppe's explicit go. The legacy lane commands below require separate authorized target and fixture grants and must not run against production. Installer lanes use the explicit disposable target in `installer.md`.
 
 - Run `.pi/skills/verify-factory/scripts/vm.sh .pi/skills/verify-factory/scripts/doctor.sh` and require `doctor=ok`.
 - Commit the change under test, then run `.pi/skills/verify-factory/scripts/lane-setup.sh <pr-id> <worker-n>`.
@@ -15,7 +15,7 @@ Read [the skill's target restrictions](../SKILL.md#target) first. During the lay
 ## Driving conventions
 
 - `S` is `.pi/skills/verify-factory/scripts`. Run commands from the repository root.
-- Send scripts with `$S/vm.sh`. Do not inline multi-line scripts in ssh. Inspect `vm.sh`, `target.sh`, and the target record before SSH. Current code selects `FACTORY_VM`, but the Arm receipt reported hardcoded routing. See "Target" in `../SKILL.md` for that discrepancy. Never rely on the retiring default.
+- Send scripts with `$S/vm.sh`. Do not inline multi-line scripts in ssh. Inspect `vm.sh`, `target.sh`, and the target record before SSH. Set `FACTORY_VM` explicitly. An unset or retired target refuses before SSH. See "Target" in `../SKILL.md`.
 - Only in the trusted VM environment, use the target's `GH_HOST` from `../targets.env` and repository-scoped `gh` reads. Never set that host locally. Do not call `gh api user`.
 - Do not remove evidence during cleanup.
 

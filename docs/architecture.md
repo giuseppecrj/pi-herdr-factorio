@@ -6,7 +6,7 @@ This explanation records the v1 design and later owner decisions. F09a implement
 - v1 ends at Human Review: the factory opens a PR and a human merges it. Full autonomy comes later by loosening the checkpoint policy, not by rebuilding.
 - pstack is a dependency.
 - The factory's first target is this repository.
-- Runtime is a controller on the exe.dev VM `pi-factorio`, with checks in GitHub-hosted CI, shaped after OpenAI's Symphony.
+- Runtime is a held controller on the exe.dev VM `nubl-factory`, with checks in GitHub-hosted CI, shaped after OpenAI's Symphony.
 - GitHub access is plain `gh` through exe.dev's GitHub integration (`GH_HOST=github.int.exe.xyz`). No GitHub App of our own, no token on the VM, and no webhooks: the controller polls, as Symphony does.
 
 ## What done means
@@ -27,7 +27,7 @@ Rigor is high. Issue text is untrusted input, and the factory runs model-written
 ## Shape
 
 ```text
-GitHub ◀──gh poll every 30 s──  exe.dev VM pi-factorio: controller ──Pi RPC in sandbox──▶ agents
+GitHub ◀──gh poll every 30 s──  exe.dev VM nubl-factory: controller ──Pi RPC in sandbox──▶ agents
    ▲                               │  GitHub via github.int.exe.xyz (token held by exe.dev)
    │                               │  models via an exe.dev integration (key held by exe.dev)
    └──push, PR, comment (gh)───────┘◀──────────────── patch, findings ──────────────────┘
@@ -213,10 +213,11 @@ Riskiest unknowns first. Each unit ends in a check before the next starts.
 
 ## VM
 
-- `pi-factorio` on exe.dev: 2 vCPU, 8 GB, 40 GB, Ubuntu 24.04, tag `factory`, created fresh rather than cloned from `dotfiles` so it inherits no personal integrations.
-- Integration `pi-factorio-repo`: exe.dev's GitHub integration for this repo only, acting as its bot, attached to this VM only.
+- `nubl-factory` is the production controller on exe.dev, installed at `3ee264c` and held since 2026-11-13 (#734). `pi-factorio` was retired and deleted that day, with its state archived.
+- Integration `nubl-factory-repo` provides repository-scoped GitHub access as `exe-dev-github-integration[bot]`.
+- Routine production access is read-only. Upgrades, bridge installation, the hold-lift (#735) and fixture runs each need Giuseppe's explicit go.
 - Model access: exe.dev's built-in `llm` integration at `https://llm.int.exe.xyz`, so no model key and no tailnet on this VM. Anthropic models come through exe.dev's gateway and draw on the account's exe.dev credits. OpenAI models come through the owner's ChatGPT subscription. The owner's 2026-11-02 decision allows Anthropic models on the VM, and plan unit F10c is the first to use them. Pi reaches both by overriding the built-in `anthropic` and `openai` providers' `baseUrl` (`host/install/provision.sh`).
-- Provisioning is `host/install/provision.sh`, idempotent, run with `ssh pi-factorio.exe.xyz bash -s < host/install/provision.sh`. It installs Node 26 (at least 26.12.1), Pi 1.4.0, Herdr 0.9.5 (checksum-pinned), pi-herdr-agents and pi-herdr-pstack.
+- Provisioning is `host/install/provision.sh`, run by the [commit-pinned installer](operations/install-exe-dev.md). It installs exactly Node 26.12.1, Pi 1.4.0, Herdr 0.9.5 (checksum-pinned), pi-herdr-agents and pi-herdr-pstack. Production currently runs Node 26.13.1; its next authorized upgrade downgrades Node to the pin.
 
 ## Known risks
 

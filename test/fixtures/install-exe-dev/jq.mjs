@@ -110,6 +110,8 @@ function evaluate(input) {
 }
 
 try {
+	process.exitCode = exitStatus ? 4 : 0;
+
 	for (const input of documents(text)) {
 		const result = evaluate(input);
 		console.log(JSON.stringify(result, null, 2));
