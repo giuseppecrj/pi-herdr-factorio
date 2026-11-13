@@ -596,52 +596,54 @@ export function percentDecoded(bytes: Buffer): Buffer {
 	return Buffer.from(out);
 }
 
+/**
+ * The bytes rewritten by a regular expression over their Latin-1 text. Latin-1
+ * maps each byte to one code unit and back, so only the matched bytes change.
+ */
+function rewritten(
+	bytes: Buffer,
+	pattern: RegExp,
+	replace: (match: string) => string,
+): Buffer {
+	return Buffer.from(
+		bytes.toString("latin1").replace(pattern, replace),
+		"latin1",
+	);
+}
+
 /** The bytes with ASCII whitespace removed, so wrapped base64 reads whole. */
 function withoutWhitespace(bytes: Buffer): Buffer {
-	return Buffer.from(
-		bytes.filter((byte) => ![0x09, 0x0a, 0x0d, 0x20].includes(byte)),
-	);
+	return rewritten(bytes, /[\t\n\r ]+/g, () => "");
 }
 
 /** The bytes with ASCII capitals lowered, so mixed-case hex reads as the lower-case form. */
 function lowerCased(bytes: Buffer): Buffer {
-	return Buffer.from(
-		bytes.map((byte) => (byte >= 0x41 && byte <= 0x5a ? byte + 0x20 : byte)),
-	);
-}
-
-function base64Byte(byte: number): boolean {
-	return (
-		(byte >= 0x30 && byte <= 0x39) ||
-		(byte >= 0x41 && byte <= 0x5a) ||
-		(byte >= 0x61 && byte <= 0x7a) ||
-		[0x2b, 0x2d, 0x2f, 0x3d, 0x5f].includes(byte)
-	);
+	return rewritten(bytes, /[A-Z]+/g, (match) => match.toLowerCase());
 }
 
 /** The bytes outside the base64 and base64url alphabets removed, as Node's decoder skips them. */
 function base64Only(bytes: Buffer): Buffer {
-	return Buffer.from(bytes.filter(base64Byte));
+	return rewritten(bytes, /[^0-9A-Za-z+\-/=_]+/g, () => "");
 }
 
 /**
  * The views a secret is looked for in: raw, JSON-unescaped,
  * percent-decoded, whitespace-stripped, lower-cased, both whitespace-stripped
  * and lower-cased, and base64-alphabet only. Hex and UTF-16 are forms of the
- * secret, so the raw view finds them.
+ * secret, so the raw view finds them. Each view is built only when the
+ * previous one has been read, so a whole-body scan holds few at once.
  */
-export function decodedViews(bytes: Buffer): Buffer[] {
+export function* decodedViews(bytes: Buffer): Generator<Buffer> {
+	yield bytes;
+	yield jsonUnescaped(bytes);
+	yield percentDecoded(bytes);
+
 	const stripped = withoutWhitespace(bytes);
 
-	return [
-		bytes,
-		jsonUnescaped(bytes),
-		percentDecoded(bytes),
-		stripped,
-		lowerCased(bytes),
-		lowerCased(stripped),
-		base64Only(bytes),
-	];
+	yield stripped;
+	yield lowerCased(stripped);
+	yield lowerCased(bytes);
+	yield base64Only(bytes);
 }
 
 /**
@@ -679,7 +681,11 @@ export class SecretScanner {
 
 		const bytes = Buffer.isBuffer(input) ? input : Buffer.from(input, "latin1");
 
-		return decodedViews(bytes).some((view) => this.contains(view));
+		for (const view of decodedViews(bytes)) {
+			if (this.contains(view)) return true;
+		}
+
+		return false;
 	}
 
 	get longest(): number {
@@ -736,16 +742,20 @@ function binaryByte(byte: number): boolean {
 const C1_CONTROL = /[\u0080-\u009f]/;
 
 /**
- * Streams a credentialed response body. Every byte must be UTF-8 text with
- * no control character, ASCII or C1, but tab, line feed, form feed and
+ * Holds a credentialed response body whole and releases it only from `end`,
+ * after the complete body has been scanned once in every decoded view, so
+ * no byte of it leaves before the decision. Every byte must be UTF-8 text
+ * with no control character, ASCII or C1, but tab, line feed, form feed and
  * carriage return, because compressed data, framed or not and at any
- * offset, is not text. Nothing passes until the first four bytes show no
- * compression magic. After that it holds back enough bytes that a secret
- * split across chunks, JSON-escaped, percent-encoded, hex in any case,
- * UTF-16, or base64 split by bytes outside its alphabet, is found before
- * any of its bytes leave. It also keeps the body's last base64-alphabet
- * bytes across chunks, so base64 split by longer runs outside its alphabet
- * still blocks the body before its last byte leaves.
+ * offset, is not text. A body over `cap` bytes is blocked as soon as it
+ * passes the cap, and its bytes are dropped, so memory per body stays
+ * bounded by the cap.
+ *
+ * `push` also refuses early, before the body ends: on compression magic in
+ * the first four bytes, on a byte that is not text, and on a secret found
+ * in the last chunk plus a window of the bytes before it or in the body's
+ * last base64-alphabet bytes. Early refusal only stops reading sooner; the
+ * whole-body scan in `end` is the decision.
  *
  * This scan is defense in depth and cannot be complete: an upstream can
  * always re-encode a secret as text no scan reads. The primary control is
@@ -755,14 +765,30 @@ const C1_CONTROL = /[\u0080-\u009f]/;
 export class ReflectionFilter {
 	readonly #scanner: SecretScanner;
 	readonly #hold: number;
+	readonly #cap: number;
 	readonly #utf8 = new TextDecoder("utf-8", { fatal: true });
 	#held: Buffer = Buffer.alloc(0);
 	#alphabet: Buffer = Buffer.alloc(0);
+	#body: Buffer[] = [];
+	#size = 0;
 	#probed = false;
+	#refused = false;
 
-	constructor(forms: readonly Buffer[]) {
+	constructor(
+		forms: readonly Buffer[],
+		cap: number = CREDENTIALED_RESPONSE_MAX_BYTES,
+	) {
 		this.#scanner = new SecretScanner(forms);
 		this.#hold = Math.max(MAGIC_PROBE_BYTES - 1, this.#scanner.longest * 6 - 1);
+		this.#cap = cap;
+	}
+
+	#blocked(): FilterStep {
+		this.#refused = true;
+		this.#body = [];
+		this.#held = Buffer.alloc(0);
+
+		return { kind: "blocked" };
 	}
 
 	#text(chunk: Buffer, final: boolean): boolean {
@@ -787,6 +813,14 @@ export class ReflectionFilter {
 	}
 
 	push(chunk: Buffer): FilterStep {
+		const nothing: FilterStep = { kind: "pass", bytes: Buffer.alloc(0) };
+
+		this.#size += chunk.length;
+
+		if (this.#refused || this.#size > this.#cap) return this.#blocked();
+
+		this.#body.push(chunk);
+
 		const joined = Buffer.concat([this.#held, chunk]);
 		let unread = chunk;
 
@@ -794,10 +828,10 @@ export class ReflectionFilter {
 			if (joined.length < MAGIC_PROBE_BYTES) {
 				this.#held = joined;
 
-				return { kind: "pass", bytes: Buffer.alloc(0) };
+				return nothing;
 			}
 
-			if (compressedMagic(joined)) return { kind: "blocked" };
+			if (compressedMagic(joined)) return this.#blocked();
 
 			this.#probed = true;
 			unread = joined;
@@ -808,30 +842,31 @@ export class ReflectionFilter {
 			this.#scanner.reveals(joined) ||
 			this.#alphabetReveals(unread)
 		) {
-			return { kind: "blocked" };
+			return this.#blocked();
 		}
 
-		const emit = Math.max(0, joined.length - this.#hold);
+		this.#held = joined.subarray(Math.max(0, joined.length - this.#hold));
 
-		this.#held = joined.subarray(emit);
-
-		return { kind: "pass", bytes: joined.subarray(0, emit) };
+		return nothing;
 	}
 
 	end(): FilterStep {
-		const rest = this.#held;
+		const body = Buffer.concat(this.#body);
+		const unread = this.#probed ? Buffer.alloc(0) : this.#held;
 
+		this.#body = [];
 		this.#held = Buffer.alloc(0);
 
 		if (
-			(!this.#probed && compressedMagic(rest)) ||
-			!this.#text(this.#probed ? Buffer.alloc(0) : rest, true) ||
-			this.#scanner.reveals(rest)
+			this.#refused ||
+			(!this.#probed && compressedMagic(unread)) ||
+			!this.#text(unread, true) ||
+			this.#scanner.reveals(body)
 		) {
 			return { kind: "blocked" };
 		}
 
-		return { kind: "pass", bytes: rest };
+		return { kind: "pass", bytes: body };
 	}
 }
 
