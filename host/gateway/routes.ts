@@ -1052,6 +1052,7 @@ function readRoute(value: JsonValue | undefined): Parsed<Route> {
 		query === null ||
 		body === null ||
 		requestHeaders === null ||
+		requestHeaders.includes("host") ||
 		responseHeaders === null ||
 		limits === null ||
 		credential === undefined ||

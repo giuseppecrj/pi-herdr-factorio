@@ -12,6 +12,8 @@ import {
 import {
 	type PlatformNetwork,
 	platformDefect,
+	readTrustedFile,
+	rootOrSelf,
 } from "../../src/trust/platform.ts";
 import {
 	type CredentialId,
@@ -45,6 +47,8 @@ export type Ceilings = ReadonlyMap<CredentialId, Ceiling>;
 export const CEILINGS_PATH = "/etc/factory/egress-credentials.json";
 
 const MAX_SECRET_BYTES = 8192;
+
+const MAX_CEILINGS_BYTES = 64 * 1024;
 
 const CEILING_KEYS = [
 	"scheme",
@@ -137,16 +141,25 @@ export function parseCeilings(
 	return { ok: true, ceilings };
 }
 
+/**
+ * Reads the ceiling file through `readTrustedFile`. Production trusts only a
+ * root-owned file, because the controller names the path; test mode also
+ * trusts the gateway's own user.
+ */
 export function loadCeilings(
 	path: string,
 	mode: TableMode,
 	network: PlatformNetwork,
 ): CeilingParse {
-	try {
-		return parseCeilings(readFileSync(path, "utf8"), mode, network);
-	} catch {
-		return { ok: false };
-	}
+	const file = readTrustedFile(
+		path,
+		MAX_CEILINGS_BYTES,
+		mode === "production" ? [0] : rootOrSelf(),
+	);
+
+	return file.kind === "present"
+		? parseCeilings(file.text, mode, network)
+		: { ok: false };
 }
 
 export type SecretLoad =
@@ -443,8 +456,9 @@ export const GATEWAY_USER_AGENT = "factory-gateway/1";
 
 /**
  * The upstream request headers, built from scratch: the route's Host, the
- * client headers the route lists minus every credential-family header, the
- * gateway's own headers, and the bound credential last.
+ * client headers the route lists minus every credential-family, framing or
+ * Host header, the gateway's own headers, and the bound credential last.
+ * The client's Host never goes upstream, whatever the route lists.
  */
 export function buildUpstreamHeaders(
 	route: Route,
@@ -463,7 +477,8 @@ export function buildUpstreamHeaders(
 			value !== undefined &&
 			route.requestHeaders.includes(name) &&
 			!isCredentialHeader(name) &&
-			!headers.some(([seen]) => seen === name)
+			!FRAMING_HEADER.test(name) &&
+			!headers.some(([seen]) => seen.toLowerCase() === name)
 		) {
 			headers.push([name, value]);
 		}

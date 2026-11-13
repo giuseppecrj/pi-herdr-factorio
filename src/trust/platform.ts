@@ -1,4 +1,10 @@
-import { lstat, readFile } from "node:fs/promises";
+import {
+	closeSync,
+	constants,
+	fstatSync,
+	openSync,
+	readFileSync,
+} from "node:fs";
 import { isIP } from "node:net";
 import {
 	arrayOf,
@@ -673,27 +679,68 @@ function fileSelectionOf(file: PlatformFile): Parsed<FileSelection> | null {
 	}
 }
 
+/** Root and the reading process's own user. */
+export function rootOrSelf(): readonly number[] {
+	return [0, process.geteuid?.() ?? 0];
+}
+
 /**
- * Reads the selection file at an entry point, without following a symlink.
- * Only a missing path is `absent`. A symlink, even a dangling one, or any
- * non-regular file is `unsafe`, and a file over the size limit is never read.
+ * Reads a host-owned configuration file through one descriptor opened with
+ * `O_NOFOLLOW`, so the file checked is the file read. Only a missing path is
+ * `absent`. A symlink, even a dangling one, any non-regular file, a file
+ * whose owner is not in `owners`, and a group- or world-writable file are
+ * `unsafe`. A file over `maxBytes` is never read.
+ */
+export function readTrustedFile(
+	path: string,
+	maxBytes: number,
+	owners: readonly number[],
+): PlatformFile {
+	let fd: number;
+
+	try {
+		fd = openSync(
+			path,
+			constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+		);
+	} catch (error) {
+		const code = error instanceof Error && "code" in error ? error.code : null;
+
+		if (code === "ENOENT") return { kind: "absent" };
+
+		return code === "ELOOP" ? { kind: "unsafe" } : { kind: "unreadable" };
+	}
+
+	try {
+		const stats = fstatSync(fd);
+
+		if (
+			!stats.isFile() ||
+			!owners.includes(stats.uid) ||
+			(stats.mode & 0o022) !== 0
+		) {
+			return { kind: "unsafe" };
+		}
+
+		if (stats.size > maxBytes) return { kind: "oversized" };
+
+		return { kind: "present", text: readFileSync(fd, "utf8") };
+	} catch {
+		return { kind: "unreadable" };
+	} finally {
+		closeSync(fd);
+	}
+}
+
+/**
+ * Reads the selection file at an entry point. It must be owned by root or
+ * by the reading user, who already chooses `FACTORY_PLATFORM`.
  */
 export async function readPlatformFile(
 	path: string = PLATFORM_FILE,
+	owners: readonly number[] = rootOrSelf(),
 ): Promise<PlatformFile> {
-	try {
-		const stats = await lstat(path);
-
-		if (!stats.isFile()) return { kind: "unsafe" };
-
-		if (stats.size > MAX_FILE_BYTES) return { kind: "oversized" };
-
-		return { kind: "present", text: await readFile(path, "utf8") };
-	} catch (error) {
-		return error instanceof Error && "code" in error && error.code === "ENOENT"
-			? { kind: "absent" }
-			: { kind: "unreadable" };
-	}
+	return readTrustedFile(path, MAX_FILE_BYTES, owners);
 }
 
 /** The entry-point resolver the CLI, the replay driver and the extension share. */

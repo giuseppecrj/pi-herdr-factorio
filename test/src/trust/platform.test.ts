@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import {
+	chmodSync,
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
@@ -873,7 +874,9 @@ describe("platform selection", () => {
 				kind: "absent",
 			});
 			assert.deepEqual(await readPlatformFile(dir), { kind: "unsafe" });
-			writeFileSync(join(dir, "platform.json"), '{"version":1}');
+			writeFileSync(join(dir, "platform.json"), '{"version":1}', {
+				mode: 0o644,
+			});
 			assert.deepEqual(await readPlatformFile(join(dir, "platform.json")), {
 				kind: "present",
 				text: '{"version":1}',
@@ -1849,6 +1852,7 @@ describe("selection file safety", () => {
 			writeFileSync(
 				target,
 				JSON.stringify({ version: 1, platform: "exmach:example.net" }),
+				{ mode: 0o644 },
 			);
 			symlinkSync(target, join(dir, "live.json"));
 			symlinkSync(join(dir, "missing.json"), join(dir, "dangling.json"));
@@ -1886,7 +1890,9 @@ describe("selection file safety", () => {
 
 			const oversized = join(dir, "oversized.json");
 
-			writeFileSync(oversized, `{"version":1}${" ".repeat(16 * 1024)}`);
+			writeFileSync(oversized, `{"version":1}${" ".repeat(16 * 1024)}`, {
+				mode: 0o644,
+			});
 			assert.deepEqual(await readPlatformFile(oversized), {
 				kind: "oversized",
 			});
@@ -1898,6 +1904,45 @@ describe("selection file safety", () => {
 				state,
 				"platform_file_malformed",
 				oversized,
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+			rmSync(state, { recursive: true, force: true });
+		}
+	});
+
+	it("refuses a group- or world-writable selection file, or one an untrusted user owns, before any lock or gh", async () => {
+		const dir = privateDir("platform-owner-");
+		const state = privateDir("platform-owner-state-");
+
+		try {
+			const path = join(dir, "platform.json");
+
+			writeFileSync(path, JSON.stringify({ version: 1 }), { mode: 0o644 });
+
+			for (const mode of [0o664, 0o646]) {
+				chmodSync(path, mode);
+				assert.deepEqual(
+					await readPlatformFile(path),
+					{ kind: "unsafe" },
+					mode.toString(8),
+				);
+				await refusedAtStartup(
+					cli(tick(state), {
+						env: { GH_HOST: "github.int.exe.xyz" },
+						reader: () => readPlatformFile(path),
+					}),
+					state,
+					"platform_file_unsafe",
+					mode.toString(8),
+				);
+			}
+
+			chmodSync(path, 0o644);
+			assert.equal((await readPlatformFile(path)).kind, "present");
+			assert.deepEqual(
+				await readPlatformFile(path, [(process.geteuid?.() ?? 0) + 1]),
+				{ kind: "unsafe" },
 			);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });

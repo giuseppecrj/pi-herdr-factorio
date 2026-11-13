@@ -5,7 +5,13 @@ import {
 	id,
 } from "./credential-fixtures.ts";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	mkdtempSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -15,6 +21,7 @@ import {
 	buildUpstreamHeaders,
 	type Ceilings,
 	isCredentialHeader,
+	loadCeilings,
 	loadSecrets,
 	parseCeilings,
 	pathRuleWithin,
@@ -61,6 +68,42 @@ describe("credential ceilings", () => {
 			).ok,
 			false,
 		);
+	});
+
+	it("loads the ceiling file only when it is a regular, trusted, non-writable file", () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-ceilings-"));
+
+		try {
+			const path = join(dir, "egress-credentials.json");
+			const link = join(dir, "link.json");
+
+			writeFileSync(path, LINEAR_CEILING, { mode: 0o644 });
+			symlinkSync(path, link);
+			assert.equal(loadCeilings(path, "test", EXE_DEV_PLATFORM).ok, true);
+			assert.equal(loadCeilings(link, "test", EXE_DEV_PLATFORM).ok, false);
+			assert.equal(loadCeilings(dir, "test", EXE_DEV_PLATFORM).ok, false);
+
+			for (const mode of [0o664, 0o646]) {
+				chmodSync(path, mode);
+				assert.equal(
+					loadCeilings(path, "test", EXE_DEV_PLATFORM).ok,
+					false,
+					mode.toString(8),
+				);
+			}
+
+			const empty = join(dir, "empty.json");
+
+			writeFileSync(empty, "{}", { mode: 0o644 });
+			assert.equal(
+				loadCeilings(empty, "production", EXE_DEV_PLATFORM).ok,
+				process.geteuid?.() === 0,
+				"production trusts only a root-owned ceiling file",
+			);
+			assert.equal(loadCeilings(empty, "test", EXE_DEV_PLATFORM).ok, true);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("refuses a ceiling that places its secret in a routing or framing header", () => {
@@ -395,6 +438,21 @@ describe("credential header strip and inject", () => {
 			["Content-Length", "12"],
 			["Authorization", `Bearer ${ECHO_SECRET}`],
 		]);
+	});
+
+	it("never copies the client Host upstream, even when a route lists host", () => {
+		const headers = buildUpstreamHeaders(
+			credentialedRoute(443, { requestHeaders: ["accept", "host", "HOST"] }),
+			["Host", "127.0.0.1:18080", "host", "evil.test", "Accept", "text/plain"],
+			0,
+			null,
+		);
+
+		assert.deepEqual(
+			headers.filter(([name]) => name.toLowerCase() === "host"),
+			[["Host", "echo.test"]],
+		);
+		assert.deepEqual(headers[1], ["accept", "text/plain"]);
 	});
 
 	it("never copies auth or cookie headers back, even when a route lists them", () => {

@@ -397,8 +397,8 @@ These close spend and exfiltration holes that the path rules cannot see **[D]**.
 The rule is to build from scratch, never to merge **[E `proto-r1/gateway.py` lines 170-180, `research/prior-art.md` recommendation 4]**.
 
 1. Request line `<METHOD> <basePath + path after prefix>[?query]` in origin form.
-2. `Host: <hostHeader>`, exactly once.
-3. The client headers listed in `requestHeaders`, after removing every credential-family header (`authorization`, `proxy-authorization`, `cookie`, `x-api-key` and any `*-api-key` or `*-token` spelling). Built-in routes copy `accept` and `content-type`, as the prototype did **[E `proto-r1/gateway.py` line 42]**.
+2. `Host: <hostHeader>`, exactly once. The client's `Host` never goes upstream. The route parser refuses a route whose `requestHeaders` lists `host`.
+3. The client headers listed in `requestHeaders`, after removing every credential-family header (`authorization`, `proxy-authorization`, `cookie`, `x-api-key` and any `*-api-key` or `*-token` spelling) and every framing header the gateway sets itself. Built-in routes copy `accept` and `content-type`, as the prototype did **[E `proto-r1/gateway.py` line 42]**.
 4. Gateway-set headers `User-Agent: factory-gateway/<version>`, `Accept-Encoding: identity`, `Connection: close` and `Content-Length`.
 5. If the route has a credential, the credential header goes last (section 4.3).
 
@@ -474,7 +474,7 @@ v1 injects no secret. The exe.dev edge injects model access, and the prototype r
 
 **Decision. systemd `LoadCredential=` on `factory.service` [D].**
 - **Values.** Each secret is a file `/etc/factory/credentials/<id>`, owner `root:root`, mode 0400. The unit gets one `LoadCredential=<id>:/etc/factory/credentials/<id>` line per secret. systemd copies each into the service's private, non-swappable credentials directory, readable by the service user, and sets `$CREDENTIALS_DIRECTORY` **[G]** for the exact semantics on the VM's systemd. `factory.service` is a system unit with `User=exedev` **[E `f88069f:server/factory.service`]**, so this works without making the source readable by `exedev`.
-- **Ceilings.** `/etc/factory/egress-credentials.json`, owner root, mode 0644, holds no secret values. It maps each id to its ceiling `{ scheme, host, port, placement, methods, paths }` (section 3.3 rule 2).
+- **Ceilings.** `/etc/factory/egress-credentials.json`, owner root, mode 0644, holds no secret values. The gateway opens it with `O_NOFOLLOW` and checks the open file. A symlink, a non-regular file, a group- or world-writable file, or one not owned by root refuses the start as `bad-credentials`. Test mode also accepts a file the gateway's own user owns. It maps each id to its ceiling `{ scheme, host, port, placement, methods, paths }` (section 3.3 rule 2).
 - **Why not a plain `exedev`-owned file.** It works, but every `exedev` process could read it at rest. `LoadCredential` keeps the source root-only, and adding or rotating a secret needs an owner VM change plus a service restart. That is the property "a PR can never add a secret" wants.
 - **Honest limit.** `exedev` has `NOPASSWD` sudo **[E `walkthrough/explanation.md` gotcha 4]**, so this protects secrets from the sandbox and from casual reads, not from a compromised host account.
 

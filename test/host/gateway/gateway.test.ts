@@ -7,11 +7,13 @@ import {
 	startEchoFixture,
 } from "./http-fixtures.ts";
 import {
+	chmodSync,
 	lstatSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { createServer, request } from "node:http";
@@ -52,6 +54,7 @@ import {
 } from "../../../host/gateway/gateway.ts";
 import { DENY_CODES, denyBody } from "../../../host/gateway/policy.ts";
 import {
+	type CredentialPlacement,
 	type Route,
 	type RouteId,
 	type RouteTable,
@@ -964,6 +967,45 @@ describe("gateway credential engine against the echo fixture", () => {
 		assert.equal(seen?.host, fixture.host);
 		assert.equal(reply.body.includes(ECHO_SECRET), false);
 		assert.equal(h.audit.at(-1)?.credential, "echo-read");
+	});
+
+	it("sends the route's Host upstream, never the client's, even when the route lists host", async () => {
+		const base = testTable(fixture.port, { host: fixture.host });
+
+		const table: RouteTable = {
+			...base,
+			routes: base.routes.map((route) =>
+				route.id === "echo-read"
+					? { ...route, requestHeaders: [...route.requestHeaders, "host"] }
+					: route,
+			),
+		};
+
+		const gateway = new Gateway({
+			table,
+			credentials: binding(table),
+			audit: new AuditLog(() => {}, 1_000_000, {
+				write: () => {},
+				sync: () => {},
+			}),
+			emit: () => {},
+			lookup: async () => [],
+		});
+
+		const socketPath = join(dir, "gw-host.sock");
+
+		await gateway.listen(socketPath);
+
+		try {
+			const foreign = fixture.foreign.length;
+			const reply = await call(socketPath, "GET", "/echo/api/echo");
+
+			assert.equal(reply.status, 200);
+			assert.equal(fixture.received.at(-1)?.host, fixture.host);
+			assert.equal(fixture.foreign.length, foreign);
+		} finally {
+			await gateway.close();
+		}
 	});
 
 	it("scrubs auth and cookie headers from the response", async () => {
@@ -2645,15 +2687,63 @@ describe("gateway process and control pipe", () => {
 
 	for (const name of ["host", ":authority"]) {
 		it(`exits bad-credentials when a table and ceiling place their secret in ${name}`, async () => {
-			await placedIn(name);
+			const first = await mainWithCeiling(
+				{ kind: "header", name, scheme: null },
+				(path, text) => writeFileSync(path, text, { mode: 0o644 }),
+			);
+
+			assert.deepEqual(first, {
+				exit: 2,
+				event: { event: "fatal", code: "bad-credentials" },
+			});
 		});
 	}
 
-	async function placedIn(name: string): Promise<void> {
+	it("starts on a regular ceiling file and exits bad-credentials on a symlinked or writable one", async () => {
+		const placement = {
+			kind: "header",
+			name: "Authorization",
+			scheme: "Bearer",
+		} as const;
+
+		const ready = await mainWithCeiling(placement, (path, text) =>
+			writeFileSync(path, text, { mode: 0o644 }),
+		);
+
+		assert.equal(ready.exit, 0);
+		assert.equal(ready.event?.event, "ready");
+
+		for (const [label, write] of [
+			[
+				"symlink",
+				(path: string, text: string) => {
+					writeFileSync(`${path}.target`, text, { mode: 0o644 });
+					symlinkSync(`${path}.target`, path);
+				},
+			],
+			[
+				"group-writable",
+				(path: string, text: string) => {
+					writeFileSync(path, text);
+					chmodSync(path, 0o664);
+				},
+			],
+		] as const) {
+			assert.deepEqual(
+				await mainWithCeiling(placement, write),
+				{ exit: 2, event: { event: "fatal", code: "bad-credentials" } },
+				label,
+			);
+		}
+	});
+
+	async function mainWithCeiling(
+		placement: CredentialPlacement,
+		writeCeiling: (path: string, text: string) => void,
+	): Promise<{ exit: number | null; event: ControlEvent | null }> {
 		const dir = mkdtempSync(join(tmpdir(), "factory-gw-main-"));
 
 		try {
-			const placement = { kind: "header", name, scheme: null } as const;
 			const route = credentialedRoute(18_081);
 
 			const table: RouteTable = {
@@ -2671,7 +2761,7 @@ describe("gateway process and control pipe", () => {
 
 			mkdirSync(join(dir, "creds"));
 			writeFileSync(join(dir, "creds", "echo-read"), "github.int.exe.xyz");
-			writeFileSync(
+			writeCeiling(
 				join(dir, "ceilings.json"),
 				LINEAR_CEILING.replace("443", "18081").replace(
 					'{"kind":"header","name":"Authorization","scheme":"Bearer"}',
@@ -2710,11 +2800,10 @@ describe("gateway process and control pipe", () => {
 			);
 
 			child.stdin.end(`${JSON.stringify(table)}\n`);
-			assert.equal(await exited, 2);
-			assert.deepEqual(parseEvent(out.trim().split("\n")[0] ?? ""), {
-				event: "fatal",
-				code: "bad-credentials",
-			});
+
+			const exit = await exited;
+
+			return { exit, event: parseEvent(out.trim().split("\n")[0] ?? "") };
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
