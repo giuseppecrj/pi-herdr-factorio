@@ -2725,7 +2725,7 @@ describe("cadence durable ownership, accounting and proposal recovery", () => {
 			stateDir,
 			exec,
 			root: join(stateDir, "absent-bundle"),
-			xdgRuntimeDir: `/run/user/${process.getuid?.()}`,
+			xdgRuntimeDir: join(stateDir, "absent-runtime"),
 			log: () => undefined,
 		});
 

@@ -67,14 +67,14 @@ render_unit() {
 held_status() {
   local after=$1 status
   status=$(timeout 120 node "$checkout/host/cli/index.ts" status --json --repo "$repo" --state-dir "$state_dir") || { refuse status 'Keep the hold. Inspect sudo journalctl -u factory.service -n 100 --no-pager and rerun the installer.'; return 1; }
-  printf '%s\n' "$status" | jq -e --arg after "$after" '.controller.state == "running" and .controller.lastTick.at > $after and .controller.lastTick.dispatch.enabled == false and (.controller.lastTick.dispatch.reasons | index("locally_disabled") != null)' >/dev/null || { refuse hold_unconfirmed 'Keep factory-state/disabled in place; inspect the journal and wait for a fresh controller status before retrying.'; return 1; }
+  printf '%s\n' "$status" | jq -e --arg after "$after" '.controller.state == "running" and .controller.lastTick.at > $after and .controller.lastTick.dispatch.enabled == false and (.controller.lastTick.dispatch.reasons | type == "array" and index("locally_disabled") != null)' >/dev/null || { refuse hold_unconfirmed 'Keep factory-state/disabled in place; inspect the journal and wait for a fresh controller status before retrying.'; return 1; }
   printf '%s\n' "$status" | jq '{dispatch: .controller.lastTick.dispatch}'
 }
 
 wait_for_hold() {
   local after=$1 _attempt
   for _attempt in {1..24}; do
-    if [ -f "$state_dir/status.json" ] && jq -e --arg after "$after" '.at > $after and .dispatch.enabled == false and (.dispatch.reasons | index("locally_disabled") != null)' "$state_dir/status.json" >/dev/null 2>&1; then
+    if [ -f "$state_dir/status.json" ] && jq -e --arg after "$after" '.at > $after and .dispatch.enabled == false and (.dispatch.reasons | type == "array" and index("locally_disabled") != null)' "$state_dir/status.json" >/dev/null 2>&1; then
       held_status "$after"
       return
     fi
