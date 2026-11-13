@@ -1729,13 +1729,17 @@ describe("F04c admission carry-overs", () => {
 		const receipt = await admit(github, state);
 
 		assert.equal(receipt.decision, "admitted");
+
 		const path = join(
 			state,
 			"admissions/github/nublai/pi-herdr-factorio/14/34537521383.json",
 		);
+
 		const stored = JSON.parse(readFileSync(path, "utf8"));
 		stored.receipt.actorType = null;
+
 		writeFileSync(path, JSON.stringify(stored));
+
 		const read = await fileAdmissionStore(state).read({
 			repo,
 			issue: 14,
