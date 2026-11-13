@@ -183,6 +183,29 @@ describe("credential ceilings", () => {
 		}
 	});
 
+	it("refuses a ceiling that places its secret in a method override or a header the gateway sets", () => {
+		const authorization =
+			'{"kind":"header","name":"Authorization","scheme":"Bearer"}';
+
+		for (const name of [
+			"x-method-override",
+			"X-HTTP-Method",
+			"accept-encoding",
+			"User-Agent",
+		]) {
+			const text = LINEAR_CEILING.replace(
+				authorization,
+				JSON.stringify({ kind: "header", name, scheme: null }),
+			);
+
+			assert.equal(
+				parseCeilings(text, "test", EXE_DEV_PLATFORM).ok,
+				false,
+				name,
+			);
+		}
+	});
+
 	it("refuses to bind a route that places its secret in a routing header", () => {
 		const placement = { kind: "header", name: "Host", scheme: null } as const;
 		const route = credentialedRoute(443);
@@ -388,6 +411,23 @@ describe("credential secrets", () => {
 			assert.equal(loadSecrets(dir, [id("missing")]).ok, false);
 			assert.equal(loadSecrets(undefined, [id("echo-read")]).ok, false);
 			assert.equal(loadSecrets(undefined, []).ok, true);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("refuses a secret shorter than 16 bytes", () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-creds-"));
+
+		try {
+			for (const [name, length] of [
+				["one", 1],
+				["fifteen", 15],
+				["sixteen", 16],
+			] as const) {
+				writeFileSync(join(dir, name), "k".repeat(length));
+				assert.equal(loadSecrets(dir, [id(name)]).ok, length >= 16, name);
+			}
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -674,6 +714,25 @@ describe("reflection scanning", () => {
 
 			assert.equal(blocked || filter.end().kind === "blocked", true, name);
 			assert.equal(new SecretScanner(forms).reveals(body), true, name);
+		}
+	});
+
+	it("passes text whose first two bytes happen to form a zlib header", () => {
+		for (const text of ["x^2 + 1", "x^", "80 items", "HKEY", "(4) items"]) {
+			const [first = 0, second = 0] = Buffer.from(text);
+
+			assert.equal(((first << 8) | second) % 31, 0, text);
+
+			const filter = new ReflectionFilter(forms);
+			const step = filter.push(Buffer.from(text));
+			const rest = filter.end();
+
+			assert.ok(step.kind === "pass" && rest.kind === "pass", text);
+			assert.equal(
+				Buffer.concat([step.bytes, rest.bytes]).toString(),
+				text,
+				text,
+			);
 		}
 	});
 

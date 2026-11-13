@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import {
 	assertNoStrays,
 	closeHttpServer,
@@ -28,7 +30,10 @@ import {
 	type JournalRecord,
 } from "../../../host/gateway/audit.ts";
 import { journalCharge } from "../../../src/core/journal.ts";
-import { startGatewayProcess } from "../../../host/gateway/client.ts";
+import {
+	ProcessHandle,
+	startGatewayProcess,
+} from "../../../host/gateway/client.ts";
 import { executionCharge } from "../../../host/sandbox/receipts.ts";
 import {
 	type ControlEvent,
@@ -386,6 +391,20 @@ describe("upstream address checks", () => {
 		]) {
 			assert.equal(addressAllowed(address, refused), false, address);
 		}
+	});
+
+	it("refuses the metadata address in the NAT64 local-use prefix 64:ff9b:1::/48", () => {
+		const refused = refusedAddresses();
+
+		for (const address of [
+			"64:ff9b:1::a9fe:a9fe",
+			"64:ff9b:1::169.254.169.254",
+			"64:ff9b:1:a9fe:a9:fe00::",
+		]) {
+			assert.equal(addressAllowed(address, refused), false, address);
+		}
+
+		assert.equal(addressAllowed("2606:4700::6810:b22", refused), true);
 	});
 
 	it("refuses the metadata address and every refused IPv4 range in their 6to4, IPv4-compatible and IPv4-mapped spellings", () => {
@@ -2614,6 +2633,29 @@ describe("gateway process request journal", () => {
 });
 
 describe("gateway process and control pipe", () => {
+	it("marks the gateway bad and kills it when its stdout fails, without an uncaught error", async () => {
+		const signals: string[] = [];
+
+		const fake = Object.assign(new EventEmitter(), {
+			stdin: new PassThrough(),
+			stdout: new PassThrough(),
+			exitCode: null,
+			kill: (signal?: NodeJS.Signals | number) => {
+				signals.push(String(signal));
+
+				return true;
+			},
+		});
+
+		const handle = new ProcessHandle(fake, "/nonexistent/gw.sock");
+
+		fake.stdout.destroy(new Error("EIO"));
+		await new Promise((done) => setImmediate(done));
+
+		assert.equal(handle.bad, true);
+		assert.deepEqual(signals, ["SIGKILL"]);
+	});
+
 	it("starts from a table on stdin, reports ready, and exits when the control pipe closes", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "factory-gw-main-"));
 		const socketPath = join(dir, "gw.sock");

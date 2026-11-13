@@ -203,7 +203,7 @@ const PSEUDO_HEADER = /^:[a-z]{1,32}$/;
  * and no credential may be placed in one. Both checks use this one list.
  */
 export const ROUTING_HEADER =
-	/^(x-forwarded(-.*)?|forwarded|x-original-.*|x-host|x-rewrite-url|x-http-method-override|proxy-.*|upgrade)$/;
+	/^(x-forwarded(-.*)?|forwarded|x-original-.*|x-host|x-rewrite-url|x-http-method-override|x-http-method|x-method-override|proxy-.*|upgrade)$/;
 
 const HOST_NAME =
 	/^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/;

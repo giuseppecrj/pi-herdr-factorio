@@ -46,6 +46,8 @@ export type Ceilings = ReadonlyMap<CredentialId, Ceiling>;
 
 export const CEILINGS_PATH = "/etc/factory/egress-credentials.json";
 
+const MIN_SECRET_BYTES = 16;
+
 const MAX_SECRET_BYTES = 8192;
 
 const MAX_CEILINGS_BYTES = 64 * 1024;
@@ -60,13 +62,14 @@ const CEILING_KEYS = [
 ] as const;
 
 const FRAMING_HEADER =
-	/^(host|:.*|content-length|transfer-encoding|connection|te|trailer|keep-alive)$/;
+	/^(host|:.*|content-length|transfer-encoding|connection|te|trailer|keep-alive|user-agent|accept-encoding)$/;
 
 /**
  * True when a placement would put the secret in a header that routes or
- * frames the request: a framing header, any pseudo-header, or a header the
- * client filter refuses as retargeting. Node keeps the last of two `Host`
- * values, so a credential named `host` would replace the route's own.
+ * frames the request: a framing header, a header the gateway sets itself,
+ * any pseudo-header, or a header the client filter refuses as retargeting.
+ * Node keeps the last of two `Host` values, so a credential named `host`
+ * would replace the route's own.
  */
 function reservedPlacement(placement: CredentialPlacement): boolean {
 	if (placement.kind !== "header") return false;
@@ -168,7 +171,7 @@ export type SecretLoad =
 
 function validSecret(bytes: Buffer): boolean {
 	return (
-		bytes.length >= 1 &&
+		bytes.length >= MIN_SECRET_BYTES &&
 		bytes.length <= MAX_SECRET_BYTES &&
 		!bytes.includes(0x0a) &&
 		!bytes.includes(0x0d)
@@ -177,7 +180,7 @@ function validSecret(bytes: Buffer): boolean {
 
 /**
  * Reads each referenced secret once from systemd's credentials directory.
- * Any missing, empty, oversized or multi-line secret refuses the whole load.
+ * Any missing, short, oversized or multi-line secret refuses the whole load.
  */
 export function loadSecrets(
 	directory: string | undefined,
@@ -687,22 +690,15 @@ export type FilterStep =
 const MAGIC_PROBE_BYTES = 4;
 
 /**
- * True when a body starts like gzip, zlib, framed brotli or zstd data, which
- * the reflection scan cannot read whatever `Content-Encoding` says.
+ * True when a body starts like gzip, framed brotli or zstd data, which the
+ * reflection scan cannot read whatever `Content-Encoding` says. A zlib
+ * header can also be plain text such as `x^`, so the text check refuses
+ * zlib data instead.
  */
 function compressedMagic(head: Buffer): boolean {
 	const [first = -1, second = -1] = head;
 
 	if (first === 0x1f && second === 0x8b) return true;
-
-	if (
-		(first & 0x0f) === 8 &&
-		first >> 4 <= 7 &&
-		second !== -1 &&
-		((first << 8) | second) % 31 === 0
-	) {
-		return true;
-	}
 
 	return [
 		[0xce, 0xb2, 0xcf, 0x81],
