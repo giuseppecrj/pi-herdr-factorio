@@ -758,7 +758,7 @@ Appendix C records the template adaptations. Ten lane boxes remain per PR, but a
 - [ ] Lane 7. Follow the updated runbook on a clean new-layout disposable VM. Save `fresh-install.log`. Pass when --check is read-only and the fresh install proves new readiness, sandbox availability, and dispatch disabled.
 - [ ] Lane 8. On the separate old-layout VM, try old-bootstrap/new-SHA, then perform the new-bootstrap upgrade, rerun, and failure recovery. Save `upgrade.log`. Pass when the negative case holds before failing without stopping the old service, the upgrade preserves state, rerun avoids restart, and failed upgrades remain stopped/disabled/held.
 - [ ] Lane 9. Run a native scripted stage on the disposable installed tree. Run real head-owned gates from a separate, unmodified product-head checkout on that VM against a same-layout local candidate. Save `native-gate.json`. Pass when both complete with their distinct product/fixture identities disclosed. Do not require production-identity tests to pass against changed fixture defaults.
-- [ ] Lane 10. After landing, collect the owner-triggered real ci.yml run. Save `actions.json`. Pass when gates/receipt succeed at exact main/candidate SHAs and report fails only the expected actor assertion without posting certification. Before landing, mark this bootstrap-pending, never passed.
+- [x] Lane 10. After landing, collect the owner-triggered real ci.yml run. Save `actions.json`. Pass when gates/receipt succeed at exact main/candidate SHAs and report fails only the expected actor assertion without posting certification. Before landing, mark this bootstrap-pending, never passed. Passed on 2026-11-13 in run 43517351186, after #782. See Post-program owner checklist.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -933,7 +933,7 @@ Every item below is the owner's, and none is checked by the program. The first t
 
 Qualification of this program:
 
-- [ ] Trigger the real `ci.yml` on product main with a same-layout fixture candidate and a valid nonce, as L13 lane 10 specifies. Gates and the exact-SHA receipt must pass. The report job's human-actor refusal is expected.
+- [x] Trigger the real `ci.yml` on product main with a same-layout fixture candidate and a valid nonce, as L13 lane 10 specifies. Gates and the exact-SHA receipt must pass. The report job's human-actor refusal is expected. Done on 2026-11-13 under Giuseppe's go, with fixture issue #778. The first run (43504500057) failed `baseline_failed` at the fixed 180 s baseline deadline, and #782 fixed it. The rerun (43517351186) on main `33198f1` with candidate `720543d` passed `gates` on all 8 checks, `heldout` included, with 0 model calls and a 149.5 s hosted baseline. `report` failed only the expected actor assertion, and no `factory-gates` check was posted. The receipts are in the private trail at `layout/L13/lane10/`. #783 tracks the hosted gate time against the 20-minute job timeout.
 - [x] Attach the fixture repository's GitHub integration to clean disposable VMs so the fresh install and the old-to-new upgrade run at final main. Done by the owner on 2026-11-13, and the lanes passed.
 
 Production steps:
