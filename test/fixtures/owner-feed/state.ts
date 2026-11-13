@@ -43,6 +43,7 @@ export async function addRun(
 	status: string,
 	options: {
 		title?: string;
+		body?: string;
 		enteredAt?: number;
 		stage?: string;
 		eventId?: string;
@@ -55,7 +56,7 @@ export async function addRun(
 
 	const snapshot = {
 		title: options.title ?? `Ticket ${issue}`,
-		body: "Fixture only.",
+		body: options.body ?? "Fixture only.",
 	};
 
 	await fileAdmissionStore(root).record(

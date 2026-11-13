@@ -58,7 +58,7 @@ import {
 	repo,
 	save,
 } from "../../fixtures/owner-feed/state.ts";
-import { EXE_DEV_PLATFORM } from "../../../src/trust/platform.ts";
+import { EXE_DEV_PLATFORM, isRepoSlug } from "../../../src/trust/platform.ts";
 import { noPlatformFile } from "../../helpers.ts";
 
 async function state<T>(body: (root: string) => Promise<T>) {
@@ -233,6 +233,34 @@ test("all ticket actions go to GitHub, internal links and forms keep the prefix,
 			);
 		assert.equal((html.match(/<form /g) ?? []).length, 1);
 		assert.doesNotMatch(html, /<script|serviceWorker|onclick=/);
+	});
+});
+
+test("viewer feed and dashboard use the supplied platform profile", async () => {
+	const repository = "nublai/profile-only";
+	assert.ok(isRepoSlug(repository));
+	await state(async (root) => {
+		const viewer = await startViewer({
+			stateDir: root,
+			port: 0,
+			platform: { ...EXE_DEV_PLATFORM, repositories: [repository] },
+		});
+
+		const previous = process.env.FACTORY_PLATFORM;
+		process.env.FACTORY_PLATFORM = "invalid-after-start";
+
+		try {
+			const feed = await http(viewer.port, "/owner-feed.json");
+			assert.equal(feed.status, 200);
+			assert.deepEqual(JSON.parse(feed.body).repositories, [
+				"nublai/profile-only",
+			]);
+			assert.equal((await http(viewer.port, "/")).status, 200);
+		} finally {
+			if (previous === undefined) delete process.env.FACTORY_PLATFORM;
+			else process.env.FACTORY_PLATFORM = previous;
+			await viewer.close();
+		}
 	});
 });
 

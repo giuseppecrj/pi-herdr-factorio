@@ -1,6 +1,7 @@
 {
 	"version": 1,
 	"repo": "giuseppecrj/pi-herdr-factorio",
+	"repositories": ["nublai/pi-herdr-factorio"],
 	"at": 1794247200000,
 	"controller": {
 		"state": "stopped",
@@ -15,6 +16,7 @@
 		{
 			"issue": 11,
 			"eventId": "1",
+			"intakeRef": null,
 			"stage": "specify",
 			"since": 1794247199000,
 			"terminal": false,
@@ -28,6 +30,7 @@
 			"ageMs": 1000,
 			"reason": null,
 			"group": "needs_you",
+			"questionsUrl": "https://github.com/giuseppecrj/pi-herdr-factorio/issues/11#issuecomment-12345678",
 			"round": 0,
 			"tokens": 1234,
 			"cap": null,

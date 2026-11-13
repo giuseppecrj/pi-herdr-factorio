@@ -7,6 +7,7 @@ import {
 	readFile,
 	rm,
 	utimes,
+	symlink,
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -32,11 +33,31 @@ import {
 import { objectOf, parseJson } from "../../../src/core/json.ts";
 import type { JsonValue } from "../../../src/core/json.ts";
 import { runCli } from "../../../host/cli/index.ts";
-import { digestOf } from "../../../src/core/run.ts";
+import { digestOf, runIdOf } from "../../../src/core/run.ts";
+import {
+	admitTicket,
+	fileAdmissionStore,
+} from "../../../src/trust/admission.ts";
+import { EXE_DEV_PLATFORM, isRepoSlug } from "../../../src/trust/platform.ts";
+import {
+	FakeGitHub,
+	fakeIssue,
+	labelEvent,
+	FAKE_REPO,
+} from "../../fake-ticket-adapter.ts";
 import { AUTONOMY_DIGEST } from "../../../src/ledger/schema.ts";
+import { postQuestions } from "../../../src/controller/effects.ts";
+import { questionsDigestOf } from "../../../src/contract/contract.ts";
+import { questionsKey } from "../../../src/contract/render.ts";
+import {
+	GitHubTicketAdapter,
+	GitHubTicketWriter,
+} from "../../../src/github/adapter.ts";
+import { fileRunFiles } from "../../../host/controller/run-files.ts";
 import { candidateLifecycleFixture, withUmask } from "../../helpers.ts";
 import {
 	addRun,
+	addAnsweredRun,
 	emptyState,
 	ownerState,
 	now,
@@ -266,6 +287,575 @@ test("active published refresh stays blocked in the feed but neutral Working on 
 		);
 		assert.equal(feed.counts.blocked, 2);
 		assert.equal(feed.workingRunCount, 1);
+	});
+});
+
+test("feed keeps one newest admission per issue, including unverified discoveries", async () => {
+	await state(async (root) => {
+		const old = await addRun(root, 30, "running");
+		const latest = await addRun(root, 30, "running", { eventId: "2" });
+
+		for (const [runId, eventId] of [
+			[old, "1"],
+			[latest, "2"],
+		] as const) {
+			await save(root, ["status.json"], {
+				repo,
+				unverifiedClaims: [
+					{
+						runId,
+						issue: 30,
+						eventId,
+						since: now,
+						why: "issue",
+						failure: null,
+					},
+				],
+			});
+			const feed = await readOwnerFeed({ stateDir: root, repo, now });
+			const entries = feed.entries.filter((entry) => entry.issue === 30);
+			assert.equal(entries.length, 1);
+			assert.equal(entries[0]?.runId, latest);
+			assert.equal(entries[0]?.eventId, "2");
+			assert.equal(entries[0]?.kind, runId === latest ? "blocked" : null);
+		}
+	});
+});
+
+test("a newer unverified discovery replaces an older claim and its counts", async () => {
+	await state(async (root) => {
+		const before = await readOwnerFeed({ stateDir: root, repo, now });
+		await addRun(root, 30, "needs_info");
+		const newer = runIdOf({ repo, issue: 30, eventId: "2" });
+		await save(root, ["status.json"], {
+			...JSON.parse(await readFile(join(root, "status.json"), "utf8")),
+			repo,
+			unverifiedClaims: [
+				{
+					runId: newer,
+					issue: 30,
+					eventId: "2",
+					since: now,
+					why: "issue",
+					failure: null,
+				},
+			],
+		});
+		const feed = await readOwnerFeed({ stateDir: root, repo, now });
+		const entries = feed.entries.filter((entry) => entry.issue === 30);
+		assert.equal(entries.length, 1);
+		assert.equal(entries[0]?.eventId, "2");
+		assert.equal(entries[0]?.kind, "blocked");
+		assert.deepEqual(feed.counts, {
+			...before.counts,
+			blocked: before.counts.blocked + 1,
+		});
+		assert.equal(feed.workingRunCount, before.workingRunCount);
+	});
+});
+
+test("a stale unverified predecessor cannot revive an expired terminal issue", async () => {
+	await state(async (root) => {
+		const old = await addRun(root, 30, "running");
+		await addRun(root, 30, "landed", {
+			eventId: "2",
+			stage: "land",
+			enteredAt: now - 8 * 86_400_000,
+		});
+		await save(root, ["status.json"], {
+			repo,
+			unverifiedClaims: [
+				{
+					runId: old,
+					issue: 30,
+					eventId: "1",
+					since: now,
+					why: "issue",
+					failure: null,
+				},
+			],
+		});
+		const feed = await readOwnerFeed({ stateDir: root, repo, now });
+		assert.equal(
+			feed.entries.some((entry) => entry.issue === 30),
+			false,
+		);
+		assert.equal(feed.counts.blocked, 1);
+	});
+});
+
+test("answered questions count as working runs without losing their attention kind", async () => {
+	await state(async (root) => {
+		await addAnsweredRun(root, 30, "Answered");
+		const feed = await readOwnerFeed({ stateDir: root, repo, now });
+		assert.equal(feed.workingRunCount, 2);
+		assert.equal(feed.counts.question_answered, 1);
+	});
+});
+
+test("feed rejects unvalidated receipt stages and timestamp text", async () => {
+	await state(async (root) => {
+		const runId = await addRun(root, 30, "running");
+		await save(root, ["stages", runId, "build-1", "receipt.json"], {
+			version: 1,
+			runId,
+			stage: "<script>stage</script>",
+			outcome: { kind: "passed" },
+			turns: 1,
+			wallMs: 1,
+			usage: { total: 1 },
+		});
+		await save(root, ["status.json"], { repo, at: "<b>tick</b>" });
+		await save(root, ["metrics.json"], { computedAt: "**now**" });
+		const feed = await readOwnerFeed({ stateDir: root, repo, now });
+		assert.equal(feed.controller.lastTick, null);
+		assert.equal(feed.metrics.computedAt, null);
+		assert.deepEqual(
+			feed.entries.find((entry) => entry.runId === runId)?.steps,
+			[],
+		);
+	});
+});
+
+test("feed refuses public and symlinked private admission, status and verdict paths", async () => {
+	await state(async (root) => {
+		const runId = await addRun(root, 30, "running", {
+			stage: "validate",
+			title: "Private title",
+		});
+
+		const claimPath = join(root, "claims", `${runId}.json`);
+		const claim = JSON.parse(await readFile(claimPath, "utf8"));
+		await save(root, ["claims", `${runId}.json`], { ...claim, validation: {} });
+		await save(root, ["validation", runId, "verdict.json"], { pass: true });
+		const admission = join(root, "admissions/github", repo, "30/1.json");
+
+		for (const path of [
+			admission,
+			join(root, "status.json"),
+			join(root, "validation", runId),
+		])
+			await chmod(path, 0o755);
+		let feed = await readOwnerFeed({ stateDir: root, repo, now });
+		assert.equal(feed.controller.lastTick, null);
+		assert.equal(
+			feed.entries.find((entry) => entry.runId === runId)?.title,
+			"Title unavailable",
+		);
+		assert.equal(
+			feed.entries.find((entry) => entry.runId === runId)?.ci,
+			"Pending",
+		);
+		await chmod(admission, 0o600);
+		await chmod(join(root, "status.json"), 0o600);
+		await chmod(join(root, "validation", runId), 0o700);
+		const bytes = await readFile(admission);
+		await rm(admission);
+		await writeFile(`${admission}.target`, bytes, { mode: 0o600 });
+		await symlink(`${admission}.target`, admission);
+		feed = await readOwnerFeed({ stateDir: root, repo, now });
+		assert.equal(
+			feed.entries.find((entry) => entry.runId === runId)?.title,
+			"Title unavailable",
+		);
+	});
+});
+
+test("feed refuses a symlinked status file and intermediate admission directory", async () => {
+	await state(async (root) => {
+		const runId = await addRun(root, 30, "running", { title: "Private title" });
+		const status = join(root, "status.json");
+		await writeFile(`${status}.target`, await readFile(status), {
+			mode: 0o600,
+		});
+		await rm(status);
+		await symlink(`${status}.target`, status);
+		const admission = join(root, "admissions/github", repo, "30");
+		const snapshot = await readFile(join(admission, "1.json"));
+		await rm(admission, { recursive: true });
+		await mkdir(`${admission}.target`, { mode: 0o700 });
+		await writeFile(join(`${admission}.target`, "1.json"), snapshot, {
+			mode: 0o600,
+		});
+		await symlink(`${admission}.target`, admission);
+		const feed = await readOwnerFeed({ stateDir: root, repo, now });
+		assert.equal(feed.controller.lastTick, null);
+		assert.equal(
+			feed.entries.find((entry) => entry.runId === runId)?.title,
+			"Title unavailable",
+		);
+	});
+});
+
+test("feed refuses a foreign-owner status file even when its mode is private", async () => {
+	await state(async (root) => {
+		const fs = (await import("node:fs/promises")).default;
+		const { syncBuiltinESMExports } = await import("node:module");
+		const original = fs.lstat;
+		const status = join(root, "status.json");
+		const info = await lstat(status);
+		assert.equal(info.mode & 0o077, 0);
+		Object.defineProperty(fs, "lstat", {
+			value: async (...args: Parameters<typeof original>) => {
+				const result = await original(...args);
+
+				if (String(args[0]) === status) result.uid = info.uid + 1;
+
+				return result;
+			},
+		});
+		syncBuiltinESMExports();
+
+		try {
+			const feed = await readOwnerFeed({ stateDir: root, repo, now });
+			assert.equal(feed.controller.lastTick, null);
+		} finally {
+			Object.defineProperty(fs, "lstat", { value: original });
+			syncBuiltinESMExports();
+		}
+	});
+});
+
+for (const [name, body, expected] of [
+	["absent", "No marker", null],
+	["valid", "Request\n<!-- factory-intake: chat-1234 -->\n", "chat-1234"],
+	[
+		"code fence",
+		"```html\n<!-- factory-intake: chat-1234 -->\n```",
+		"chat-1234",
+	],
+	[
+		"multi-line comment",
+		"<!--\n<!-- factory-intake: chat-1234 -->\n-->",
+		"chat-1234",
+	],
+	["malformed", "<!-- factory-intake: short -->", null],
+	[
+		"duplicate",
+		"<!-- factory-intake: chat-1234 -->\n<!-- factory-intake: chat-5678 -->",
+		null,
+	],
+	["inline", "Text <!-- factory-intake: chat-1234 -->", null],
+	["HTML", "<!-- factory-intake: <b>chat-1234</b> -->", null],
+	[
+		"Markdown",
+		"<!-- factory-intake: [chat-1234](https://example.com) -->",
+		null,
+	],
+] as const) {
+	test(`intakeRef strict admitted marker: ${name}`, async () => {
+		await state(async (root) => {
+			const runId = await addRun(root, 30, "running", { body });
+			const feed = await readOwnerFeed({ stateDir: root, repo, now });
+			assert.equal(
+				feed.entries.find((entry) => entry.runId === runId)?.intakeRef,
+				expected,
+			);
+			assert.equal(
+				feed.gaps.includes(`duplicate_intake_marker:${runId.slice(0, 12)}`),
+				name === "duplicate",
+			);
+		});
+	});
+}
+
+test("intakeRef stays bound to admission when the current GitHub issue body changes", async () => {
+	await state(async (root) => {
+		assert.ok(isRepoSlug(FAKE_REPO));
+		const github = new FakeGitHub();
+
+		const issue = fakeIssue(30, {
+			body: "No marker at label time",
+			timeline: [
+				labelEvent({
+					id: 100,
+					at: "2026-10-29T01:21:37Z",
+					actor: "giuseppecrj",
+				}),
+			],
+		});
+
+		github.add(issue);
+
+		const receipt = await admitTicket({
+			platform: EXE_DEV_PLATFORM,
+			exec: github.exec,
+			env: () => "/home/exedev",
+			repo: FAKE_REPO,
+			issue: 30,
+			allowlist: EXE_DEV_PLATFORM.repositories,
+			store: fileAdmissionStore(root),
+		});
+
+		assert.equal(receipt.decision, "admitted", JSON.stringify(receipt));
+		const runId = runIdOf({ repo: FAKE_REPO, issue: 30, eventId: "100" });
+		await save(root, ["claims", `${runId}.json`], {
+			repo: FAKE_REPO,
+			runId,
+			issue: 30,
+			eventId: "100",
+			seq: 1,
+			status: "running",
+			stage: "specify",
+			enteredAt: now,
+		});
+		github.add({ ...issue, body: "<!-- factory-intake: late-1234 -->" });
+		const calls = github.calls.length;
+		let output = "";
+		assert.equal(
+			await runCli(
+				["owner-feed", "--json", "--state-dir", root, "--repo", FAKE_REPO],
+				{
+					readPlatformFile: noPlatformFile,
+					exec: github.exec,
+					env: () => undefined,
+					stdout: (text) => {
+						output += text;
+					},
+					stderr: assert.fail,
+				},
+			),
+			0,
+		);
+		assert.equal(JSON.parse(output).entries[0].intakeRef, null);
+		assert.equal(github.calls.length, calls);
+	});
+});
+
+test("repositories comes from the selected platform profile, even for an empty feed", async () => {
+	await state(async (root) => {
+		await rm(join(root, "claims"), { recursive: true });
+		await mkdir(join(root, "claims"), { mode: 0o700 });
+		let output = "";
+		assert.equal(
+			await runCli(["owner-feed", "--json", "--state-dir", root], {
+				readPlatformFile: async () => ({
+					kind: "present",
+					text: JSON.stringify({
+						version: 1,
+						platform: "exe-dev",
+						repositories: ["nublai/one", "nublai/two"],
+					}),
+				}),
+				exec: async () => {
+					throw new Error("no transport");
+				},
+				env: () => undefined,
+				stdout: (text) => {
+					output += text;
+				},
+				stderr: assert.fail,
+			}),
+			0,
+		);
+		assert.deepEqual(JSON.parse(output).repositories, [
+			"nublai/one",
+			"nublai/two",
+		]);
+		assert.deepEqual(JSON.parse(output).entries, []);
+	});
+});
+
+async function prepareQuestions(root: string, delayCommentRead = false) {
+	const runId = await addRun(root, 30, "needs_info");
+	const github = new FakeGitHub(repo);
+	const issue = github.add(fakeIssue(30));
+	const files = fileRunFiles(root);
+	const questions = [{ text: "Which behavior?", cites: [] }];
+	const digest = questionsDigestOf(questions);
+	assert.equal(await files.writeQuestions({ runId, digest, questions }), true);
+
+	const adapter = new GitHubTicketAdapter({
+		exec: github.exec,
+		repo,
+		paging: { pageSize: 100, maxPages: 10 },
+	});
+
+	const writer = new GitHubTicketWriter({
+		repo,
+		exec: async (command, args, options) => {
+			const result = await github.exec(command, args, options);
+
+			if (delayCommentRead)
+				github.failures.set(`repos/${repo}/issues/30/comments`, {
+					stdout: "",
+					stderr: "unavailable",
+					code: 1,
+				});
+
+			return result;
+		},
+	});
+
+	const run = { runId, issue: 30 };
+	const body = `Questions\n\n${questionsKey(runId, digest)}`;
+
+	const post = () =>
+		postQuestions(
+			{ platform: EXE_DEV_PLATFORM, log: () => {}, files },
+			adapter,
+			writer,
+			run,
+			digest,
+			body,
+		);
+
+	assert.equal(await post(), true);
+	const comment = issue.comments[0];
+	assert.ok(comment !== undefined);
+
+	return {
+		runId,
+		github,
+		issue,
+		files,
+		post,
+		comment,
+		reference: join(root, "contracts", runId, "questions-comment.json"),
+		url: `https://github.com/${repo}/issues/30#issuecomment-${comment.id}`,
+	};
+}
+
+test("questionsUrl is captured from the trusted comment and recovered after a missing receipt without another post", async () => {
+	await state(async (root) => {
+		const asked = await prepareQuestions(root);
+		assert.equal(
+			(await readOwnerFeed({ stateDir: root, repo, now })).entries.find(
+				(entry) => entry.runId === asked.runId,
+			)?.questionsUrl,
+			asked.url,
+		);
+		await rm(asked.reference);
+		assert.equal(await asked.post(), true);
+		assert.equal(asked.issue.comments.length, 1);
+		let output = "";
+		assert.equal(
+			await runCli(["owner-feed", "--json", "--state-dir", root], {
+				readPlatformFile: noPlatformFile,
+				exec: async () => {
+					throw new Error("feed must stay offline");
+				},
+				env: () => undefined,
+				stdout: (text) => {
+					output += text;
+				},
+				stderr: assert.fail,
+			}),
+			0,
+		);
+		assert.equal(
+			JSON.parse(output).entries.find(
+				(entry: FeedEntry) => entry.runId === asked.runId,
+			).questionsUrl,
+			asked.url,
+		);
+	});
+});
+
+test("questionsUrl uses the acknowledged POST id when the comments re-read is unavailable", async () => {
+	await state(async (root) => {
+		const asked = await prepareQuestions(root, true);
+		assert.equal(
+			(await readOwnerFeed({ stateDir: root, repo, now })).entries.find(
+				(entry) => entry.runId === asked.runId,
+			)?.questionsUrl,
+			asked.url,
+		);
+		assert.equal(asked.issue.comments.length, 1);
+	});
+});
+
+for (const defect of ["type", "app", "scope", "edited", "duplicate"] as const) {
+	test(`questionsUrl rejects a controller comment with invalid ${defect}`, async () => {
+		await state(async (root) => {
+			const asked = await prepareQuestions(root);
+			await rm(asked.reference);
+
+			if (defect === "type") asked.comment.type = "User";
+
+			if (defect === "app") asked.comment.appSlug = "other-app";
+
+			if (defect === "scope")
+				asked.comment.issueUrl = `https://api.github.com/repos/${repo}/issues/999`;
+
+			if (defect === "edited")
+				asked.comment.lastEditedAt = "2026-10-29T02:00:00Z";
+
+			if (defect === "duplicate")
+				asked.issue.comments.push({
+					...asked.comment,
+					id: asked.comment.id + 1,
+					nodeId: "duplicate-node",
+				});
+			assert.equal(await asked.post(), true);
+			assert.equal(
+				(await readOwnerFeed({ stateDir: root, repo, now })).entries.find(
+					(entry) => entry.runId === asked.runId,
+				)?.questionsUrl,
+				null,
+			);
+		});
+	});
+}
+
+test("questionsUrl ignores forged issue text and comments from other authors", async () => {
+	await state(async (root) => {
+		const asked = await prepareQuestions(root);
+		await rm(asked.reference);
+		asked.comment.login = "attacker";
+		asked.comment.body = `https://evil.example/questions\n${asked.comment.body}`;
+		assert.equal(await asked.post(), true);
+		const trusted = asked.issue.comments.at(-1);
+		assert.ok(trusted !== undefined);
+		assert.equal(asked.issue.comments.length, 2);
+		assert.equal(
+			(await readOwnerFeed({ stateDir: root, repo, now })).entries.find(
+				(entry) => entry.runId === asked.runId,
+			)?.questionsUrl,
+			`https://github.com/${repo}/issues/30#issuecomment-${trusted.id}`,
+		);
+	});
+});
+
+test("questionsUrl requires matching private receipt bindings and is null outside needs_info", async () => {
+	await state(async (root) => {
+		const asked = await prepareQuestions(root);
+		const reference = JSON.parse(await readFile(asked.reference, "utf8"));
+
+		const entry = async () =>
+			(await readOwnerFeed({ stateDir: root, repo, now })).entries.find(
+				(item) => item.runId === asked.runId,
+			);
+
+		for (const change of [
+			{ runId: digestOf("other") },
+			{ repo: "other/repo" },
+			{ issue: 99 },
+			{ digest: digestOf("other") },
+			{ commentId: "1#https://evil.example" },
+		]) {
+			await save(root, ["contracts", asked.runId, "questions-comment.json"], {
+				...reference,
+				...change,
+			});
+			assert.equal((await entry())?.questionsUrl, null);
+		}
+
+		await save(root, ["contracts", asked.runId, "questions-comment.json"], {
+			...reference,
+			url: "https://evil.example",
+		});
+		assert.equal((await entry())?.questionsUrl, asked.url);
+		await chmod(asked.reference, 0o644);
+		assert.equal((await entry())?.questionsUrl, null);
+		await chmod(asked.reference, 0o600);
+		await addRun(root, 30, "running", { eventId: "2" });
+		assert.equal(
+			(await readOwnerFeed({ stateDir: root, repo, now })).entries.find(
+				(item) => item.issue === 30,
+			)?.questionsUrl,
+			null,
+		);
 	});
 });
 
@@ -576,7 +1166,7 @@ test("a held run keeps its kind, group and runId when only the hold reason chang
 	});
 });
 
-test("L05 pins the owner header's controller state from the lock and its status read regardless of mode", async () => {
+test("the owner header reads the lock but ignores a public status file", async () => {
 	const root = await mkdtemp(join(tmpdir(), "owner-header-"));
 
 	try {
@@ -620,7 +1210,10 @@ test("L05 pins the owner header's controller state from the lock and its status 
 		await rm(join(root, "controller.lock"));
 
 		await chmod(join(root, "status.json"), 0o644);
-		assert.deepEqual(await readOwnerHeader(root, now, repo), header("stopped"));
+		assert.deepEqual(await readOwnerHeader(root, now, repo), {
+			...header("stopped"),
+			controller: { state: "stopped", lastTick: null, localSwitch: "enabled" },
+		});
 		assert.deepEqual(await readOwnerHeader(root, now), {
 			repo: null,
 			at: now,
@@ -823,7 +1416,7 @@ test("the owner feed and header skip the status read when no repository resolves
 		assert.equal(
 			(await ownerHeader(root, resolved.controller, now, repo)).controller
 				.lastTick,
-			"tick",
+			null,
 		);
 		assert.deepEqual(resolved.reads, ["status", "lock"]);
 	} finally {

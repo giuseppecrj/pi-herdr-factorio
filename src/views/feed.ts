@@ -26,6 +26,7 @@ import { isRepoSlug, type RepoSlug } from "../trust/platform.ts";
 import { isDigest, type Verdict } from "../core/run.ts";
 import type { SessionOutcome } from "../core/execution.ts";
 import { FAMILY_MISSING } from "../core/models.ts";
+import { isModelStage } from "../core/stages.ts";
 
 export type FeedStep = {
 	stage: string;
@@ -38,6 +39,7 @@ export type DisplayGroup = "needs_you" | "failed" | "working" | "done";
 
 export type FeedEntry = AttentionRun & {
 	group: DisplayGroup;
+	questionsUrl: string | null;
 	round: number | null;
 	tokens: number | null;
 	cap: number | null;
@@ -50,6 +52,7 @@ export type FeedEntry = AttentionRun & {
 export type OwnerFeed = {
 	version: 1;
 	repo: RepoSlug | null;
+	repositories: readonly RepoSlug[];
 	at: number;
 	controller: {
 		state: string;
@@ -95,12 +98,20 @@ export type RunReads = {
 	readonly readStageReceipt: (path: string) => Promise<StepReceipt | null>;
 };
 
-async function localJson(
+export async function localJson(
 	root: string,
 	...parts: string[]
 ): Promise<JsonValue | undefined> {
 	try {
 		let path = root;
+		const base = await lstat(root);
+
+		if (
+			!base.isDirectory() ||
+			base.uid !== process.geteuid?.() ||
+			(base.mode & 0o077) !== 0
+		)
+			return undefined;
 
 		for (const part of parts) {
 			path = join(path, part);
@@ -146,6 +157,16 @@ function thresholdsOf(
 		: undefined;
 }
 
+function timestampOf(value: JsonValue | undefined): string | null {
+	const text = textOf(value);
+
+	return text !== null &&
+		/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(text) &&
+		Number.isFinite(Date.parse(text))
+		? text
+		: null;
+}
+
 function metricOf(
 	snapshot: JsonValue | undefined,
 	repo: RepoSlug | null,
@@ -163,7 +184,7 @@ function metricOf(
 		Number(share) <= 1;
 
 	return {
-		computedAt: textOf(saved?.computedAt),
+		computedAt: timestampOf(saved?.computedAt),
 		stale: saved?.stale === true,
 		status: complete ? "Complete" : "Pending",
 		share: complete ? Number(share) : null,
@@ -215,7 +236,12 @@ async function stepReceipts(
 				continue;
 			const stage = textOf(receipt.record.stage);
 
-			if (stage === null) continue;
+			if (
+				stage === null ||
+				!isModelStage(stage) ||
+				!name.startsWith(`${stage}-`)
+			)
+				continue;
 			const previous = steps.find((step) => step.stage === stage);
 
 			if (previous === undefined)
@@ -237,6 +263,42 @@ async function stepReceipts(
 	}
 
 	return steps;
+}
+
+async function questionsUrl(
+	root: string,
+	entry: AttentionRun,
+): Promise<string | null> {
+	if (entry.kind !== "question_asked" || entry.status !== "needs_info")
+		return null;
+
+	const reference = objectOf(
+		await localJson(root, "contracts", entry.runId, "questions-comment.json"),
+	);
+
+	const questions = objectOf(
+		await localJson(root, "contracts", entry.runId, "questions.json"),
+	);
+
+	const repo = textOf(reference?.repo);
+	const commentId = textOf(reference?.commentId);
+	const digest = textOf(reference?.digest);
+
+	return reference?.version === 1 &&
+		reference.runId === entry.runId &&
+		reference.issue === entry.issue &&
+		repo !== null &&
+		isRepoSlug(repo) &&
+		entry.issueUrl === `https://github.com/${repo}/issues/${entry.issue}` &&
+		commentId !== null &&
+		/^[1-9][0-9]{0,19}$/.test(commentId) &&
+		digest !== null &&
+		isDigest(digest) &&
+		questions?.version === 1 &&
+		questions.runId === entry.runId &&
+		questions.digest === digest
+		? `${entry.issueUrl}#issuecomment-${commentId}`
+		: null;
 }
 
 async function detail(
@@ -324,6 +386,16 @@ async function detail(
 		const round = countOf(raw.round) ?? 0;
 
 		try {
+			if (
+				(await localJson(
+					root,
+					"validation",
+					entry.runId,
+					...(round === 0 ? [] : [`r${round}`]),
+					"verdict.json",
+				)) === undefined
+			)
+				throw new Error("verdict_unavailable");
 			verdict = host.readStoredVerdict(
 				join(
 					root,
@@ -413,6 +485,7 @@ async function detail(
 		since,
 		ageMs: since === null || since > now ? null : now - since,
 		group,
+		questionsUrl: await questionsUrl(root, entry),
 		round: projection?.round ?? countOf(raw?.round),
 		tokens: book === null ? countOf(raw?.usage) : candidateUsage(book),
 		cap,
@@ -476,7 +549,7 @@ export async function ownerHeader(
 					: lock.kind === "none"
 						? "stopped"
 						: "unavailable",
-			lastTick: textOf(status?.at),
+			lastTick: timestampOf(status?.at),
 			localSwitch: await fileAdmissionStore(root).localSwitch(),
 		},
 	};
@@ -499,6 +572,7 @@ export async function ownerFeed(input: {
 	stateDir: string;
 	repo?: RepoSlug | null;
 	now: number;
+	repositories?: readonly RepoSlug[];
 	controller: ControllerReads;
 	host: RunReads;
 }): Promise<OwnerFeed> {
@@ -552,11 +626,27 @@ export async function ownerFeed(input: {
 	let workingRunCount = 0;
 
 	if (attention.kind === "available") {
+		const newest = new Map<number, AttentionRun>();
+
 		for (const run of attention.runs) {
+			const previous = newest.get(run.issue);
+
+			if (
+				previous === undefined ||
+				BigInt(run.eventId) > BigInt(previous.eventId)
+			)
+				newest.set(run.issue, run);
+		}
+
+		for (const run of newest.values()) {
 			if (corruptIssues.has(run.issue)) continue;
 			const entry = await detail(root, run, now, input.host);
 
-			if (!entry.terminal && entry.kind === null) workingRunCount++;
+			if (
+				!entry.terminal &&
+				(entry.kind === null || entry.kind === "question_answered")
+			)
+				workingRunCount++;
 
 			if (entry.kind !== null) typedCounts[entry.kind]++;
 
@@ -567,31 +657,6 @@ export async function ownerFeed(input: {
 				continue;
 			entries.push(entry);
 		}
-
-		for (const held of attention.groups.blocked) {
-			if (entries.some((entry) => entry.runId === held.runId)) continue;
-			const issue = Number(held.issueUrl.split("/").at(-1));
-
-			if (!Number.isSafeInteger(issue) || corruptIssues.has(issue)) continue;
-			typedCounts.blocked++;
-			entries.push({
-				...held,
-				issue,
-				eventId: "",
-				stage: "admit",
-				since: held.ageMs === null ? null : now - held.ageMs,
-				terminal: false,
-				kind: "blocked",
-				group: "needs_you",
-				round: null,
-				tokens: null,
-				cap: null,
-				ci: "Pending",
-				failure: null,
-				notProven: [],
-				steps: [],
-			});
-		}
 	}
 
 	entries.sort((a, b) => (b.since ?? 0) - (a.since ?? 0) || b.issue - a.issue);
@@ -599,6 +664,7 @@ export async function ownerFeed(input: {
 	return {
 		version: 1,
 		repo,
+		repositories: input.repositories ?? [],
 		at: now,
 		controller: header.controller,
 		durableUsage: durableUsageOf(status?.durableUsage),

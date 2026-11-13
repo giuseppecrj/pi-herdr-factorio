@@ -404,6 +404,16 @@ export function fileRunFiles(
 			);
 		},
 
+		async writeQuestionsComment(reference) {
+			return (
+				(await ensure(contracts)) &&
+				(await writeOnce(
+					join(contracts, reference.runId, "questions-comment.json"),
+					`${JSON.stringify({ version: 1, ...reference })}\n`,
+				))
+			);
+		},
+
 		async writeLink(runId, link) {
 			return (
 				(await ensure(links)) &&

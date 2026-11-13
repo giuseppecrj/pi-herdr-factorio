@@ -15,7 +15,11 @@ import {
 	questionsDigestOf,
 } from "../contract/contract.ts";
 import { parseSpecifyOutput } from "../contract/parse.ts";
-import { renderQuestions, renderSummary } from "../contract/render.ts";
+import {
+	renderQuestions,
+	renderSummary,
+	questionsKey,
+} from "../contract/render.ts";
 import type { FamilyInput } from "../core/models.ts";
 import type { NonEmpty } from "../core/run.ts";
 import { GitHubTicketAdapter, GitHubTicketWriter } from "../github/adapter.ts";
@@ -79,7 +83,7 @@ export async function postKeyed(
 	input: Pick<OrchestratorInput, "platform" | "log">,
 	adapter: GitHubTicketAdapter,
 	writer: GitHubTicketWriter,
-	run: ActiveRun,
+	run: Pick<ActiveRun, "issue" | "runId">,
 	key: string,
 	body: string,
 ): Promise<boolean> {
@@ -100,6 +104,93 @@ export async function postKeyed(
 	}
 
 	return post.kind === "posted";
+}
+
+export async function postQuestions(
+	input: Pick<OrchestratorInput, "platform" | "log" | "files">,
+	adapter: GitHubTicketAdapter,
+	writer: GitHubTicketWriter,
+	run: Pick<ActiveRun, "issue" | "runId">,
+	digest: QuestionsDigest,
+	body: string,
+): Promise<boolean> {
+	const key = questionsKey(run.runId, digest);
+
+	const found = await hasKeyed(input, adapter, run.issue, key);
+
+	if (found === null) return false;
+
+	if (!found) {
+		const post = await writer.postComment(run.issue, body);
+
+		if (post.kind !== "posted") {
+			input.log("comment_unconfirmed", {
+				issue: run.issue,
+				runId: run.runId,
+				outcome: post.kind,
+			});
+
+			return false;
+		}
+
+		if (
+			await input.files.writeQuestionsComment({
+				runId: run.runId,
+				repo: adapter.repo,
+				issue: run.issue,
+				digest,
+				commentId: post.id,
+			})
+		)
+			return true;
+	}
+
+	const comments = await adapter.readComments(run.issue);
+
+	if (comments.kind === "ok") {
+		const candidates = comments.value.filter(
+			(comment) =>
+				isControllerComment(comment, input.platform) &&
+				comment.author?.type === "Bot" &&
+				(comment.appSlug === null ||
+					comment.appSlug === input.platform.controllerAppSlug) &&
+				comment.issueUrl.endsWith(
+					`/repos/${adapter.repo}/issues/${run.issue}`,
+				) &&
+				comment.body.trimEnd().split("\n").at(-1) === key,
+		);
+
+		const [comment] = candidates;
+
+		if (candidates.length === 1 && comment !== undefined) {
+			const edits = await adapter.readCommentEdits([comment.nodeId]);
+
+			const edit =
+				edits.kind === "ok" ? edits.value.get(comment.nodeId) : undefined;
+
+			if (
+				edit?.id === comment.id &&
+				edit.repo === adapter.repo &&
+				edit.issue === run.issue &&
+				edit.lastEditedAt === null &&
+				(await input.files.writeQuestionsComment({
+					runId: run.runId,
+					repo: adapter.repo,
+					issue: run.issue,
+					digest,
+					commentId: comment.id,
+				}))
+			)
+				return true;
+		}
+	}
+
+	input.log("questions_reference_unavailable", {
+		issue: run.issue,
+		runId: run.runId,
+	});
+
+	return true;
 }
 
 export function specified(

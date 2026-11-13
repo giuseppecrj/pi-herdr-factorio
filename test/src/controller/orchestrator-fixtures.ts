@@ -228,6 +228,7 @@ export function memoryFiles(): RunFiles & {
 
 			return true;
 		},
+		writeQuestionsComment: fileRunFiles(artifactRoot).writeQuestionsComment,
 		async writeQuestions({ runId, digest }) {
 			questions.set(runId, digest);
 

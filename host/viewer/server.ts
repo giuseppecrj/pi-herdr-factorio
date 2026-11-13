@@ -8,6 +8,11 @@ import { objectOf, textOf } from "../../src/core/json.ts";
 import { isDigest } from "../../src/core/run.ts";
 import { plainTitle } from "../../src/views/attention.ts";
 import {
+	readPlatformFile,
+	resolvePlatform,
+	type PlatformProfile,
+} from "../../src/trust/platform.ts";
+import {
 	readOwnerFeed,
 	readOwnerHeader,
 	readOwnerRun,
@@ -24,6 +29,7 @@ import { renderRun } from "./render.ts";
 
 export type ViewerOptions = {
 	stateDir: string;
+	platform?: PlatformProfile;
 	runId?: string;
 	port?: number;
 	allowedHost?: string;
@@ -52,6 +58,17 @@ export async function startViewer(options: ViewerOptions) {
 	if (options.runId !== undefined && !isDigest(options.runId))
 		throw new Error("invalid run id");
 	const stateDir = await realpath(options.stateDir);
+
+	const resolved =
+		options.platform === undefined
+			? await resolvePlatform({
+					env: (name) => process.env[name],
+					readFile: readPlatformFile,
+				})
+			: ({ ok: true, profile: options.platform } as const);
+
+	if (!resolved.ok) throw new Error("platform unavailable");
+	const platform = resolved.profile;
 
 	const css = (
 		await Promise.all(
@@ -243,7 +260,7 @@ export async function startViewer(options: ViewerOptions) {
 			if (path === "/owner-feed.json") {
 				send(
 					200,
-					JSON.stringify(await readOwnerFeed({ stateDir })),
+					JSON.stringify(await readOwnerFeed({ stateDir, platform })),
 					"application/json; charset=utf-8",
 				);
 
@@ -255,7 +272,7 @@ export async function startViewer(options: ViewerOptions) {
 					send(
 						200,
 						renderDashboard(
-							await readOwnerFeed({ stateDir }),
+							await readOwnerFeed({ stateDir, platform }),
 							base,
 							holdToken,
 							path.startsWith("/?run=") ? path.slice(6) : undefined,
@@ -378,6 +395,7 @@ export async function startViewer(options: ViewerOptions) {
 export async function runViewerCli(
 	argv: readonly string[],
 	io: { stdout: (text: string) => void; stderr: (text: string) => void },
+	platform: PlatformProfile,
 ) {
 	let options: ViewerOptions;
 
@@ -411,7 +429,7 @@ export async function runViewerCli(
 				!basePathPattern.test(values["base-path"]))
 		)
 			throw new Error("usage");
-		options = { stateDir, port };
+		options = { stateDir, port, platform };
 
 		if (values.run !== undefined) options.runId = values.run;
 

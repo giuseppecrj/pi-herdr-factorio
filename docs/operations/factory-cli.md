@@ -714,6 +714,8 @@ A contract is stored as `<state-dir>/contracts/<runId>/contract.json`, mode 0600
 
 Questions are stored as `<state-dir>/contracts/<runId>/questions.json`. Then the controller posts one questions comment, adds `factory:needs-info` and removes `factory:ready`. Only then does it post the terminal marker. A removal that answers 404 counts as done.
 
+After posting or recovering the keyed questions comment, the controller verifies its author, bot and app identity, repository, issue, key and unedited GraphQL record. It saves the comment ID and run bindings in the private `<state-dir>/contracts/<runId>/questions-comment.json` receipt. OwnerFeed v1 uses this receipt for `entries[].questionsUrl` without reading GitHub. An unavailable or unwritable reference logs `questions_reference_unavailable` and leaves the URL null. It does not delay the label swap or terminal marker. Historical runs without a receipt stay null.
+
 The controller renders both comments from validated fields only:
 
 - URL userinfo/query credentials and bare credential shapes are redacted: GitHub `gh[pousr]_` plus at least 36 base62 characters or `github_pat_` plus at least 20 base62/underscore characters; `sk-` plus at least 20 base62 characters; OpenAI `sk-proj-`, `sk-svcacct-` and `sk-admin-`, and Anthropic `sk-ant-`/`sk-ant-api03-`, plus at least 20 base62/underscore/hyphen characters; other `sk-<word>-` prefixes with a payload containing at least 20 consecutive base62 characters; xAI `xai-` plus at least 20 base62 characters; AWS `AKIA` plus 16 uppercase letters/digits. Credentials after a hyphenated prefix, such as `token-ghp_…` or `key-AKIA…`, are also redacted. Ordinary hyphenated words such as `sk-learn-compatible-wrapper-module-name` are unchanged;

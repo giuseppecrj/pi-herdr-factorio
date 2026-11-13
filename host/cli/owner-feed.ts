@@ -1,7 +1,13 @@
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { isRepoSlug, type RepoSlug } from "../../src/trust/platform.ts";
-import { readLock, readStatus } from "../controller/state.ts";
+import {
+	isRepoSlug,
+	type RepoSlug,
+	type PlatformProfile,
+	resolvePlatform,
+	readPlatformFile,
+} from "../../src/trust/platform.ts";
+import { readLock } from "../controller/state.ts";
 import {
 	type ControllerReads,
 	type FeedEntry,
@@ -11,6 +17,7 @@ import {
 	type OwnerHeader,
 	ownerRun,
 	type RunReads,
+	localJson,
 } from "../../src/views/feed.ts";
 import { readStoredVerdict } from "../controller/state.ts";
 import { readStageReceipt } from "../sandbox/receipts.ts";
@@ -19,6 +26,7 @@ import { type CliIo, EXIT } from "./platform.ts";
 export async function runOwnerFeedCli(
 	argv: readonly string[],
 	io: CliIo,
+	platform: PlatformProfile,
 ): Promise<number> {
 	try {
 		const { values, positionals } = parseArgs({
@@ -41,7 +49,7 @@ export async function runOwnerFeedCli(
 			throw new Error("usage");
 		const repo = values.repo;
 		io.stdout(
-			`${JSON.stringify(await readOwnerFeed({ stateDir: values["state-dir"], repo: repo !== undefined && isRepoSlug(repo) ? repo : undefined }), null, 2)}\n`,
+			`${JSON.stringify(await readOwnerFeed({ stateDir: values["state-dir"], repo: repo !== undefined && isRepoSlug(repo) ? repo : undefined, platform }), null, 2)}\n`,
 		);
 
 		return EXIT.ok;
@@ -58,7 +66,7 @@ const RUN_READS: RunReads = { readStoredVerdict, readStageReceipt };
 
 function controllerReads(root: string): ControllerReads {
 	return {
-		readStatus: () => readStatus(root),
+		readStatus: async () => (await localJson(root, "status.json")) ?? null,
 		readLock: () => readLock(root),
 	};
 }
@@ -77,13 +85,25 @@ export async function readOwnerFeed(input: {
 	stateDir: string;
 	repo?: RepoSlug | null;
 	now?: number;
+	platform?: PlatformProfile;
 }): Promise<OwnerFeed> {
 	const root = resolve(input.stateDir);
+
+	const platform =
+		input.platform === undefined
+			? await resolvePlatform({
+					env: (name) => process.env[name],
+					readFile: readPlatformFile,
+				})
+			: ({ ok: true, profile: input.platform } as const);
+
+	if (!platform.ok) throw new Error("platform_unavailable");
 
 	return ownerFeed({
 		stateDir: root,
 		repo: input.repo,
 		now: input.now ?? Date.now(),
+		repositories: platform.profile.repositories,
 		controller: controllerReads(root),
 		host: RUN_READS,
 	});
@@ -96,6 +116,7 @@ export async function readOwnerRun(
 ): Promise<FeedEntry | null> {
 	return ownerRun(stateDir, runId, feed, {
 		...RUN_READS,
-		readStatus: () => readStatus(resolve(stateDir)),
+		readStatus: async () =>
+			(await localJson(resolve(stateDir), "status.json")) ?? null,
 	});
 }
