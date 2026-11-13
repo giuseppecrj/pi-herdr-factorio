@@ -211,13 +211,14 @@ export function labelEvent(input: {
 	id: number;
 	at: string;
 	actor: string;
+	actorType?: "User" | "Bot";
 	label?: string;
 	event?: "labeled" | "unlabeled";
 }): JsonValue {
 	return {
 		id: input.id,
 		event: input.event ?? "labeled",
-		actor: { login: input.actor, type: "User" },
+		actor: { login: input.actor, type: input.actorType ?? "User" },
 		created_at: input.at,
 		label: { name: input.label ?? READY_LABEL, color: "ededed" },
 	};

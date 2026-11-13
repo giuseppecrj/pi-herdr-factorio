@@ -310,6 +310,7 @@ node host/cli/index.ts admit --json --repo <owner/name> --issue <number> --state
 - `.github/factory/WORKFLOW.md` on `main` is valid. `baseSha` is the `main` SHA it was loaded from.
 - The issue is open, is not a pull request, and has the `factory:ready` label.
 - The latest `factory:ready` entry on the issue timeline is a `labeled` event, not `unlabeled`. This is the admitted event. Latest means the greatest `created_at`, whatever order the timeline returns. When two `factory:ready` entries share that second, admission refuses with `ambiguous_snapshot` and `label_events_same_second`.
+- That event's actor is not a bot. A bot is an account GitHub types `Bot`, or a login ending in `[bot]`. This covers the controller's own app under every platform profile.
 - That event's actor has `admin`, `maintain` or `write` permission on the repository. `maintain` counts as write. `triage`, `read` and `none` are refused. The issue author does not matter.
 - The title and body at the time of the event are proved, as described under snapshot.
 - No admission was recorded before for the same event ID.
@@ -401,6 +402,7 @@ Each reason has `kind`. Some have more fields.
 | `no_label_event` | The issue has the label but its timeline has no `factory:ready` event. | |
 | `timeline_unavailable` | Reading the timeline failed. | `failure` |
 | `actor_withheld` | The event's actor login does not match GitHub's login grammar. Its permission is not looked up. | |
+| `bot_actor` | The event's actor is a bot: GitHub types the account `Bot`, or its login ends in `[bot]`. Its permission is not looked up, so a bot with write access is still refused. | |
 | `permission_unavailable` | Reading the actor's permission failed. A login that is not a user gives HTTP 404. | `failure` |
 | `unauthorized` | The actor has `triage`, `read` or `none`. | `permission` |
 | `snapshot_unavailable` | The GraphQL edit-history read failed. | `failure` |
@@ -620,6 +622,7 @@ A refusal of a candidate is cached as a decision only when it rests on evidence 
 | `pull_request`, `issue_closed` | yes | The issue read shows it. |
 | `unauthorized` | yes | GitHub reported the actor's permission. |
 | `actor_withheld` | yes | The label event's actor login is outside GitHub's login grammar. |
+| `bot_actor` | yes | The label event's actor is a bot. |
 | `answers_record_invalid`, `link_record_invalid` | yes | An earlier linked run's clarification record is missing, unreadable or fails integrity checks. An explicit unlinked record ends the history normally; it is not a missing link. No run starts with partial history. The reason remains in the tick snapshot shown by `status --json`; `admission_refused` logs `detail=previous_answers` or `previous_link`, with `retry=false`, once per issue change. Restore the affected linked run's original link/answers records from backup, then change the issue (for example, relabel) to retry; do not fabricate a link for an unlinked run. |
 | `ambiguous_snapshot` with `label_events_same_second`, `renamed_since_label`, `edited_at_label_time`, `version_withheld` or `answer_at_label_time` | yes | The timeline or the edit history shows it, and it stays until the issue changes. |
 | `not_labeled` | no | The issue read lacks the label the list showed, or the timeline's latest `factory:ready` entry is a removal while the issue has the label. When the label really was removed, the next list omits the issue, so it costs nothing more. |

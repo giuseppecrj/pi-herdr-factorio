@@ -537,13 +537,42 @@ describe("GitHubTicketAdapter timeline paging", () => {
 					kind: "labeled",
 					id: "7",
 					at: "2026-10-29T01:21:37Z",
-					actor: { kind: "login", login: "giuseppecrj" },
+					actor: { kind: "login", login: "giuseppecrj", bot: false },
 					label: READY_LABEL,
 				},
 				{ kind: "other" },
 				{ kind: "renamed", at: "2026-10-29T01:21:50Z" },
 			],
 		});
+	});
+
+	it("marks a label actor as a bot by account type or by [bot] login", async () => {
+		const github = new FakeGitHub();
+		const at = "2026-10-29T01:21:37Z";
+
+		github.add(
+			fakeIssue(14, {
+				timeline: [
+					labelEvent({ id: 1, at, actor: "renovate", actorType: "Bot" }),
+					labelEvent({ id: 2, at, actor: "some-app[bot]" }),
+					labelEvent({ id: 3, at, actor: "writer" }),
+				],
+			}),
+		);
+
+		const read = await adapterFor(github).readTimeline(14);
+
+		assert.equal(read.kind, "ok");
+		assert.deepEqual(
+			read.value.map((entry) =>
+				entry.kind === "labeled" ? entry.actor : null,
+			),
+			[
+				{ kind: "login", login: "renovate", bot: true },
+				{ kind: "login", login: "some-app[bot]", bot: true },
+				{ kind: "login", login: "writer", bot: false },
+			],
+		);
 	});
 
 	it("rejects a label event without an ID or a valid time", async () => {

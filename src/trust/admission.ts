@@ -93,6 +93,7 @@ export type RefusalReason =
 	| { readonly kind: "not_labeled" }
 	| { readonly kind: "no_label_event" }
 	| { readonly kind: "actor_withheld" }
+	| { readonly kind: "bot_actor" }
 	| {
 			readonly kind: "unauthorized";
 			readonly permission: Exclude<PermissionLevel, WritePermission>;
@@ -760,6 +761,8 @@ async function evaluate(input: {
 	const actor: Actor = event.actor;
 
 	if (actor.kind === "withheld") return refuse({ kind: "actor_withheld" });
+
+	if (actor.bot) return refuse({ kind: "bot_actor" });
 
 	const permission = await adapter.readPermission(actor.login);
 

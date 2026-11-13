@@ -29,9 +29,12 @@ import {
 
 export type Login = string & { readonly __brand: "Login" };
 
-/** A label actor or author: a login that passed GitHub's grammar, or not. */
+/**
+ * A label actor or author: a login that passed GitHub's grammar, or not.
+ * `bot` is true when GitHub typed the account `Bot` or its login ends in `[bot]`.
+ */
 export type Actor =
-	| { readonly kind: "login"; readonly login: Login }
+	| { readonly kind: "login"; readonly login: Login; readonly bot: boolean }
 	| { readonly kind: "withheld" };
 
 export type GitHubFailure =
@@ -262,7 +265,13 @@ function actorOf(value: JsonValue | undefined): Actor {
 	const login = stringOf(pathOf(value, ["login"]));
 
 	return login !== null && isLogin(login)
-		? { kind: "login", login }
+		? {
+				kind: "login",
+				login,
+				bot:
+					login.endsWith("[bot]") ||
+					stringOf(pathOf(value, ["type"])) === "Bot",
+			}
 		: { kind: "withheld" };
 }
 

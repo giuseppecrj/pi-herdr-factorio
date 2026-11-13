@@ -31,8 +31,13 @@ import {
 import {
 	EXE_DEV_PLATFORM,
 	isRepoSlug,
+	PLATFORM_NAMES,
+	type PlatformName,
+	type PlatformProfile,
+	parsePlatformProfile,
 	type RepoSlug,
 } from "../../../src/trust/platform.ts";
+import { READY_LABEL } from "../../../src/trust/policy.ts";
 import {
 	FAKE_REPO,
 	FakeGitHub,
@@ -161,9 +166,7 @@ describe("admitTicket", () => {
 
 		const refused = await admit(byBot);
 
-		assert.deepEqual(refused.reasons, [
-			{ kind: "unauthorized", permission: "none" },
-		]);
+		assert.deepEqual(refused.reasons, [{ kind: "bot_actor" }]);
 		assert.equal(refused.actor, "exe-dev-github-integration[bot]");
 		assert.equal(refused.snapshotDigest, null);
 	});
@@ -470,6 +473,191 @@ describe("admitTicket", () => {
 			{ kind: "workflow_unavailable", error: "missing_workflow_file" },
 		]);
 		assert.equal(receipt.baseSha, null);
+	});
+});
+
+const BUILT_IN_SELECTORS: Record<PlatformName, string> = {
+	"exe-dev": "exe-dev",
+	exmach: "exmach:example.net",
+};
+
+function builtInProfile(name: PlatformName): PlatformProfile {
+	const resolved = parsePlatformProfile({
+		selector: BUILT_IN_SELECTORS[name],
+		file: { kind: "absent" },
+	});
+
+	if (!resolved.ok) throw new Error(`${name}: ${resolved.reason}`);
+
+	return resolved.profile;
+}
+
+function permissionReads(github: FakeGitHub): number {
+	return github.calls.filter((call) => call.join(" ").includes("collaborators"))
+		.length;
+}
+
+describe("bot label actors", () => {
+	it("refuses the controller's own bot under every built-in profile as bot_actor", async () => {
+		assert.deepEqual(Object.keys(BUILT_IN_SELECTORS), [...PLATFORM_NAMES]);
+
+		for (const name of PLATFORM_NAMES) {
+			const profile = builtInProfile(name);
+			const github = new FakeGitHub();
+
+			github.permissions.set(profile.controllerLogin, "write");
+			github.add(
+				fakeIssue(14, {
+					author: "giuseppecrj",
+					timeline: [
+						labelEvent({
+							id: 34537521383,
+							at: LABEL_AT,
+							actor: profile.controllerLogin,
+							actorType: "Bot",
+						}),
+					],
+				}),
+			);
+
+			const receipt = await admitTicket({
+				platform: profile,
+				exec: github.exec,
+				env: () => "/home/exedev",
+				repo,
+				issue: 14,
+				allowlist: profile.repositories,
+				store: fileAdmissionStore(stateDir()),
+			});
+
+			assert.equal(receipt.decision, "refused", name);
+			assert.deepEqual(receipt.reasons, [{ kind: "bot_actor" }], name);
+			assert.equal(receipt.eventId, "34537521383", name);
+			assert.equal(receipt.actor, profile.controllerLogin, name);
+			assert.equal(receipt.actorPermission, null, name);
+			assert.equal(receipt.snapshotDigest, null, name);
+			assert.equal(permissionReads(github), 0, name);
+		}
+	});
+
+	it("refuses another app's bot by account type or by [bot] login, even with write access", async () => {
+		const bots: [string, "User" | "Bot"][] = [
+			["dependabot[bot]", "Bot"],
+			["renovate", "Bot"],
+			["some-app[bot]", "User"],
+		];
+
+		for (const [login, actorType] of bots) {
+			const github = new FakeGitHub();
+
+			github.permissions.set(login, "write");
+			github.add(
+				fakeIssue(14, {
+					timeline: [
+						labelEvent({ id: 7, at: LABEL_AT, actor: login, actorType }),
+					],
+				}),
+			);
+
+			const receipt = await admit(github);
+
+			assert.deepEqual(receipt.reasons, [{ kind: "bot_actor" }], login);
+			assert.equal(receipt.actor, login, login);
+			assert.equal(permissionReads(github), 0, login);
+		}
+	});
+
+	it("still admits a human with write access after one permission read", async () => {
+		const github = new FakeGitHub();
+
+		github.add(labeledBy("writer", { author: "dependabot[bot]" }));
+
+		const receipt = await admit(github);
+
+		assert.equal(receipt.decision, "admitted");
+		assert.equal(receipt.actor, "writer");
+		assert.equal(receipt.actorPermission, "write");
+		assert.equal(permissionReads(github), 1);
+	});
+});
+
+describe("creation-time label", () => {
+	const CREATED_AT = "2026-11-13T04:12:09Z";
+	const TITLE = "[ORCH-1] Add an intake marker";
+	const BODY = "Drafted in Shep.\n\n<!-- factory-intake: 0123abcd -->";
+
+	const created = (label: string, id: number): JsonValue => ({
+		id,
+		node_id: `LE_kwDOcreation${id}`,
+		url: `https://api.github.com/repos/${FAKE_REPO}/issues/events/${id}`,
+		actor: {
+			login: "giuseppecrj",
+			id: 3210987,
+			node_id: "MDQ6VXNlcjMyMTA5ODc=",
+			type: "User",
+			site_admin: false,
+		},
+		event: "labeled",
+		commit_id: null,
+		commit_url: null,
+		created_at: CREATED_AT,
+		label: { name: label, color: "0E8A16" },
+		performed_via_github_app: null,
+	});
+
+	const createdWithReady = (change: Partial<FakeIssue> = {}) =>
+		fakeIssue(14, {
+			author: "giuseppecrj",
+			updatedAt: CREATED_AT,
+			title: TITLE,
+			body: BODY,
+			labels: ["enhancement", READY_LABEL],
+			timeline: [
+				created("enhancement", 21004871233),
+				created(READY_LABEL, 21004871234),
+			],
+			...change,
+		});
+
+	it("admits the creation-time labeled event, by the creator, from the unedited body", async () => {
+		const github = new FakeGitHub();
+
+		github.add(createdWithReady());
+
+		const receipt = await admit(github);
+
+		assert.equal(receipt.decision, "admitted");
+		assert.deepEqual(receipt.reasons, []);
+		assert.equal(receipt.eventId, "21004871234");
+		assert.equal(receipt.eventAt, CREATED_AT);
+		assert.equal(receipt.actor, "giuseppecrj");
+		assert.equal(receipt.snapshotSource, "unedited");
+		assert.equal(receipt.snapshotDigest, unedited(TITLE, BODY));
+	});
+
+	it("refuses it as edited_at_label_time once the body is edited, because the created edit shares the label's second", async () => {
+		const github = new FakeGitHub();
+		const editedAt = "2026-11-13T04:12:40Z";
+
+		github.add(
+			createdWithReady({
+				body: `${BODY}\n\nTypo fixed.`,
+				lastEditedAt: editedAt,
+				includesCreatedEdit: true,
+				versions: [
+					{ editedAt, deletedAt: null, diff: `${BODY}\n\nTypo fixed.` },
+					{ editedAt: CREATED_AT, deletedAt: null, diff: BODY },
+				],
+			}),
+		);
+
+		const receipt = await admit(github);
+
+		assert.deepEqual(receipt.reasons, [
+			{ kind: "ambiguous_snapshot", detail: "edited_at_label_time" },
+		]);
+		assert.equal(receipt.eventId, "21004871234");
+		assert.equal(receipt.actor, "giuseppecrj");
 	});
 });
 
