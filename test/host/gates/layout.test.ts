@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
-	appendFileSync,
 	cpSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
+	readlinkSync,
 	renameSync,
 	rmSync,
 	symlinkSync,
@@ -121,14 +122,19 @@ function read(root: string, path: string): string {
 
 function write(root: string, path: string, text: string): void {
 	mkdirSync(dirname(join(root, path)), { recursive: true });
+	rmSync(join(root, path), { force: true });
 	writeFileSync(join(root, path), text);
+}
+
+function append(root: string, path: string, text: string): void {
+	write(root, path, read(root, path) + text);
 }
 
 function edit(root: string, path: string, from: string | RegExp, to: string) {
 	const text = read(root, path);
 	const next = text.replace(from, to);
-	assert.notEqual(next, text, `${String(from)} not found in ${path}`);
-	writeFileSync(join(root, path), next);
+	assert.ok(next !== text, `${String(from)} not found in ${path}`);
+	write(root, path, next);
 }
 
 function includesMatch(problems: readonly string[], pattern: RegExp): void {
@@ -214,14 +220,41 @@ function loose(token: string): RegExp {
 	);
 }
 
+function treeDigest(root: string): string {
+	const hash = createHash("sha256");
+
+	const walk = (dir: string) => {
+		for (const entry of readdirSync(join(root, dir), {
+			withFileTypes: true,
+		}).sort((a, b) => a.name.localeCompare(b.name))) {
+			const path = join(dir, entry.name);
+			hash.update(`${path}\0`);
+
+			if (entry.isSymbolicLink()) hash.update(readlinkSync(join(root, path)));
+			else if (entry.isDirectory()) walk(path);
+			else hash.update(readFileSync(join(root, path)));
+		}
+	};
+
+	walk("");
+
+	return hash.digest("hex");
+}
+
 describe("layout guard", () => {
 	let pristine = "";
+	let pristineDigest = "";
 	const scratches: string[] = [];
 
 	before(() => {
 		pristine = temp("layout-pristine-");
 		copyTree(pristine);
 		symlinkSync(join(repo, "node_modules"), join(pristine, "node_modules"));
+		pristineDigest = treeDigest(pristine);
+	});
+
+	after(() => {
+		assert.equal(treeDigest(pristine), pristineDigest);
 	});
 
 	function release(...dirs: string[]): void {
@@ -236,7 +269,7 @@ describe("layout guard", () => {
 	function scratch(): string {
 		const dir = mkdtempSync(join(tmpdir(), "layout-scratch-"));
 		scratches.push(dir);
-		cpSync(pristine, dir, { recursive: true });
+		execFileSync("cp", ["-al", `${pristine}/.`, dir]);
 
 		return dir;
 	}
@@ -278,8 +311,9 @@ describe("layout guard", () => {
 
 		it("fails an unlisted reverse edge into server or host", () => {
 			const root = scratch();
-			appendFileSync(
-				join(root, "src/core/run.ts"),
+			append(
+				root,
+				"src/core/run.ts",
 				'export { readLock } from "../../host/controller/state.ts";\nimport "../../host/cli/index.ts";\nimport "../../host/missing.ts";\n',
 			);
 
@@ -306,8 +340,9 @@ describe("layout guard", () => {
 				'"exceptions": []',
 				'"exceptions": [],\n\t\t"reverseEdges": ["src/maintenance/replay.ts -> host/bundle/manifest.ts", "src/core/run.ts -> host/controller/state.ts"]',
 			);
-			appendFileSync(
-				join(root, "src/core/run.ts"),
+			append(
+				root,
+				"src/core/run.ts",
 				'export { readLock } from "../../host/controller/state.ts";\n',
 			);
 
@@ -369,7 +404,7 @@ describe("layout guard", () => {
 		it("keeps the status driver's root-copy exception to its one import", () => {
 			const root = scratch();
 			plantRootCopy(root);
-			appendFileSync(join(root, driver), 'import "./src/run.ts";\n');
+			append(root, driver, 'import "./src/run.ts";\n');
 
 			includesMatch(
 				layout(root, "imports"),
@@ -535,7 +570,7 @@ describe("layout guard", () => {
 						),
 						`${entry.id} ${token}:\n${problems.join("\n")}`,
 					);
-				cpSync(join(pristine, entry.reader), join(root, entry.reader));
+				write(root, entry.reader, read(pristine, entry.reader));
 			}
 
 			assert.deepEqual(layout(root, "readers"), []);
@@ -627,7 +662,7 @@ describe("layout guard", () => {
 					);
 
 					assert.ok(original);
-					appendFileSync(join(twice, declaration.file), `${original[0]}\n`);
+					append(twice, declaration.file, `${original[0]}\n`);
 
 					includesMatch(
 						layout(twice, "readers"),
@@ -855,8 +890,9 @@ describe("layout guard", () => {
 
 		it("fails a new unresolved literal and an allowlist entry nothing needs", () => {
 			const root = scratch();
-			appendFileSync(
-				join(root, "src/core/run.ts"),
+			append(
+				root,
+				"src/core/run.ts",
 				'export const NOWHERE = "src/nowhere.ts";\n',
 			);
 			edit(
@@ -900,8 +936,9 @@ describe("layout guard", () => {
 	describe("shell", () => {
 		it("fails added, removed and dangling path tokens", () => {
 			const root = scratch();
-			appendFileSync(
-				join(root, ".pi/skills/verify-factory/scripts/drive-serve.sh"),
+			append(
+				root,
+				".pi/skills/verify-factory/scripts/drive-serve.sh",
 				"node server/new-entry.ts\n",
 			);
 			edit(
@@ -965,8 +1002,9 @@ describe("layout guard", () => {
 		it("fails a heredoc import whose name the target no longer exports", () => {
 			const root = scratch();
 			const script = ".pi/skills/verify-factory/scripts/drive-replay.sh";
-			appendFileSync(
-				join(root, script),
+			append(
+				root,
+				script,
 				"node --input-type=module - <<'NODE'\nimport { readLock } from './host/controller/state.ts';\nNODE\n",
 			);
 			edit(
@@ -1006,12 +1044,14 @@ describe("layout guard", () => {
 				"test/host/sandbox/registry.test.ts",
 				'import "./audit.cases.ts";\n',
 			);
-			appendFileSync(
-				join(root, "test/src/trust/policy.test.ts"),
+			append(
+				root,
+				"test/src/trust/policy.test.ts",
 				'import "../../host/sandbox/audit.cases.ts";\n',
 			);
-			appendFileSync(
-				join(root, "test/host/sandbox/registry.test.ts"),
+			append(
+				root,
+				"test/host/sandbox/registry.test.ts",
 				'import "../gateway/routes.test.ts";\n',
 			);
 			write(root, "test/acceptance/999/checks/held.test.ts", "");
@@ -1210,8 +1250,9 @@ describe("layout guard", () => {
 			const root = scratch();
 			const lines = read(root, "src/core/run.ts").split("\n").length - 1;
 
-			appendFileSync(
-				join(root, "docs/operations/viewer.md"),
+			append(
+				root,
+				"docs/operations/viewer.md",
 				[
 					"See `src/missing.ts:3`.",
 					`See \`src/core/run.ts:${lines + 1}\` and \`src/core/run.ts\` line ${lines + 5}.`,
@@ -1221,10 +1262,7 @@ describe("layout guard", () => {
 				].join("\n"),
 			);
 
-			appendFileSync(
-				join(root, "docs/history/handoff.md"),
-				"See `src/missing.ts:3`.\n",
-			);
+			append(root, "docs/history/handoff.md", "See `src/missing.ts:3`.\n");
 			edit(
 				root,
 				"docs/operations/sandbox.md",
