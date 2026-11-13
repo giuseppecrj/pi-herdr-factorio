@@ -1,3 +1,4 @@
+// HISTORICAL (F09b, 2026-11-04): not a maintained tool. Imports of server/ and src/ predate the layout program (docs/history/path-map.md) and no longer resolve, so it does not run today.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
