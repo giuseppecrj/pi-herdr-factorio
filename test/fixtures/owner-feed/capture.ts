@@ -67,6 +67,7 @@ const BUILDERS = {
 	working: async (root) => {
 		const runId = await addRun(root, 17, "running", {
 			title: "Render <b>raw</b> **markdown** titles as plain text",
+			body: "Fixture only.\n<!-- factory-intake: shep-1234 -->",
 			stage: "build",
 		});
 

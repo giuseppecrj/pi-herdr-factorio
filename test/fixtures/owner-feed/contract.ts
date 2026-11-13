@@ -22,6 +22,7 @@ type FieldTypes = Readonly<Record<string, Leaf>>;
 
 const FEED = {
 	repo: "string|null",
+	repositories: "array",
 	at: "number",
 	controller: "object",
 	entries: "array",
@@ -63,6 +64,7 @@ const METRICS = {
 const ENTRY = {
 	issue: "number",
 	eventId: "string",
+	intakeRef: "string|null",
 	stage: "string",
 	since: "number|null",
 	terminal: "boolean",

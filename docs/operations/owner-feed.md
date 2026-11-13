@@ -49,6 +49,14 @@ Two host probes deliberately keep different rules:
 
 A bridge running as another user usually gets an unavailable feed, not an error, because the state directory itself fails the check. These checks apply to feed reads, not a change to the admission or status CLI's storage policy.
 
+### Read several repositories
+
+The bridge runs `owner-feed --json --state-dir <dir> --repo <owner/name>` once per configured state-directory and repository pair. It merges entries using `repo` plus `issue`, not the issue number alone. Keep availability and notification history separate for each pair. An unavailable read must not erase another repository's entries.
+
+`repositories` is the selected platform profile's admission allowlist. It is present even when `entries` is empty, so the bridge can distinguish an idle repository from one outside that allowlist. It is not a list of repositories whose state this read contains. `repo` still identifies the one repository projected by this invocation.
+
+One controller still runs with one `serve --repo` and one state directory. A platform profile with several repositories allows choosing any one of them, but does not make that controller poll all of them. A single controller serving several repositories would need repository-scoped state and dispatch. That change is out of scope. Do not run competing controllers for the same repository.
+
 ### Detect an unavailable feed
 
 An unreadable state directory is a successful read with no data. The CLI exits 0 and prints `entries: []` and `gaps: ["state_unavailable"]`. That happens when the directory is missing, is not private, has no `claims/` directory, or when no repository is known. The bridge must treat either gap as no information. It must not seed from it, and it must not treat the empty `entries` as "nothing needs the owner".
@@ -61,6 +69,7 @@ An unreadable state directory is a successful read with no data. The CLI exits 0
 | --- | --- | --- |
 | `version` | `1` | The contract version. |
 | `repo` | string or null | `owner/name` from `status.json` or `--repo`. |
+| `repositories` | array of string | Admission allowlist from the selected platform profile, not the current issue or status text. |
 | `at` | number | Read time, epoch milliseconds. `ageMs` counts from it. |
 | `controller.state` | string | `running`, `stopped` or `unavailable`. |
 | `controller.lastTick` | string or null | Timestamp of the last controller tick, from `status.json`. |
@@ -92,6 +101,7 @@ An entry (`FeedEntry`, `src/views/feed.ts:43`) has these fields.
 | `issue` | number | The GitHub issue number. |
 | `runId` | string | 64 hexadecimal characters. Changes with every admission event. |
 | `eventId` | string | The admission event, as a decimal string, including unverified discoveries that have no claim file yet. |
+| `intakeRef` | string or null | The strict intake marker from the digest-verified admission snapshot. |
 | `stage` | string | `admit`, `specify`, `accept`, `build`, `validate`, `review` or `land`. |
 | `status` | string | The run's claim status, such as `running`, `needs_info`, `waiting`, `failed` or `landed`. |
 | `kind` | string or null | The attention kind, or null when the run needs nobody. |
@@ -120,6 +130,14 @@ A `FeedStep` has these members.
 | `outcome` | string | The receipt's outcome kind, such as `passed`, `refused`, `failed` or `budget_exhausted`. |
 | `wallMs` | number or null | Wall time of the stage, in milliseconds. |
 | `tokens` | number or null | Tokens the stage used. |
+
+### Intake marker
+
+Shep writes `<!-- factory-intake: <id> -->` in the issue body. The ID has 8 to 64 ASCII letters, digits or hyphens. The marker must occupy its entire line, with exactly those spaces and delimiters. The parser accepts LF and CRLF line endings. Missing, malformed, inline or duplicate markers give `intakeRef: null`. Two marker openings, including a malformed second marker, also add `duplicate_intake_marker:<12-character run prefix>` to `gaps`.
+
+The feed reads the body saved at admission and verifies its receipt and digest. It never reads the current GitHub body. An edit after the label cannot attach the run to another chat. An unverified discovery without an admission snapshot has `intakeRef: null`.
+
+Shep's bridge must retain `repositories` and `entries[].intakeRef`, correlate chats by the exact intake ID, and perform the per-pair reads above. These are additive v1 fields. Older readers may ignore them.
 
 ### Attention kinds and groups
 
@@ -188,15 +206,16 @@ The CLI has no hold command. A phone action that changes the hold, or does anyth
 
 ## Text fields
 
-Only `title` carries free text from outside the factory, and `plainTitle` is its only bound. No other field in the feed carries issue, pull request or model-written text today.
+`title` carries free text from outside the factory, bounded by `plainTitle`. `intakeRef` also comes from the issue body, but accepts only the strict ASCII identifier described above. No issue body or model-written prose appears in the feed.
 
 | Field | Where the text comes from | Bound today |
 | --- | --- | --- |
 | `entries[].title` | The saved admission snapshot of the issue, written by the issue author. | `plainTitle` (`src/views/attention.ts:18`) replaces control characters (code points below 32 and 127 to 159) and bidirectional marks with a space, then keeps the first 120 code points, which can be 480 UTF-8 bytes. It does not escape HTML, strip Markdown, or remove other invisible characters such as the zero-width space. It returns `Title unavailable` when the snapshot is missing. |
+| `entries[].intakeRef` | The saved admission snapshot body. | 8 to 64 ASCII letters, digits or hyphens, or null. |
 | `entries[].reason` | The controller. | A closed vocabulary. The `HandoffReason` values that `wireReason` checks (`src/candidate/codec.ts:653`), `candidate_book_unavailable`, `feedback_overflow`, `working_generation`, `claim_unverified:<why>[:<failure>]` and `feedback_unavailable:<reason>[:<failure>]`. Each part of the last two comes from a fixed list (`src/views/attention.ts:368`, `src/views/attention.ts:426`). |
 | `entries[].failure` | The ledger row or terminal record. | `stage` and `class` are fixed lists. `reason` must match `^[a-z][a-z0-9_]{0,63}$` (`src/ledger/schema.ts:456`, `src/ledger/schema.ts:636`). |
 | `entries[].notProven` | Fixed sentences from `renderLimitation` (`src/candidate/handoff.ts:2710`), and one fallback sentence (`src/views/feed.ts:393`). | Criterion and scenario IDs appear only when they match `A<n>` or `S<n>`. A judgment outcome appears only as a value of `JUDGMENT_OUTCOMES` (`src/candidate/review.ts:74`). Criterion text, scenario text and review reasons never appear. |
-| `gaps[]` | The controller. | Fixed codes (`unrecognized_claim`, `state_unavailable`), or a code with an issue number or a 12-character run prefix (`invalid_claim:<12 characters>`, `ambiguous_issue:<n>`, `candidate_book_unavailable:<12 characters>`, `invalid_link:<12 characters>`). |
+| `gaps[]` | The controller. | Fixed codes (`unrecognized_claim`, `state_unavailable`), or a code with an issue number or a 12-character run prefix (`invalid_claim:<12 characters>`, `ambiguous_issue:<n>`, `candidate_book_unavailable:<12 characters>`, `invalid_link:<12 characters>`, `duplicate_intake_marker:<12 characters>`). |
 | `unreadable[].reason` | The controller. | One constant sentence (`src/views/feed.ts:539`). |
 | `entries[].steps[].stage` | A stage receipt the controller wrote. | A model stage name matching its directory. |
 | `controller.lastTick`, `metrics.computedAt` | Files the controller wrote. | A UTC timestamp with seconds and optional three-digit milliseconds. Invalid text becomes null. |
@@ -235,7 +254,7 @@ An unavailable read, per [Detect an unavailable feed](#detect-an-unavailable-fee
 | `blocked.json` | A blocked run, `stale: true`. |
 | `budget.json` | `budget_exhausted`. |
 | `failed.json` | A failure with `failure.stage`, `class` and `reason`. |
-| `working.json` | A running build with a step and a title that holds HTML and Markdown. |
+| `working.json` | A running build with a step, a valid intake ID and a title that holds HTML and Markdown. |
 
 There is no `spec_review` capture. `test/fixtures/owner-feed/feed-v1.json` is the older multi-run golden. Each capture holds one run, so a client sees one kind at a time.
 

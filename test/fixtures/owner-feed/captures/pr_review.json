@@ -1,6 +1,7 @@
 {
 	"version": 1,
 	"repo": "giuseppecrj/pi-herdr-factorio",
+	"repositories": ["nublai/pi-herdr-factorio"],
 	"at": 1794247200000,
 	"controller": {
 		"state": "stopped",
@@ -15,6 +16,7 @@
 		{
 			"issue": 1,
 			"eventId": "1",
+			"intakeRef": null,
 			"stage": "land",
 			"since": 1793901600000,
 			"terminal": false,

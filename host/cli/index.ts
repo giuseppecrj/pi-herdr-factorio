@@ -342,7 +342,8 @@ export async function runCli(
 
 	if (argv[0] === "metrics") return runMetricsCli(argv.slice(1), io, platform);
 
-	if (argv[0] === "owner-feed") return runOwnerFeedCli(argv.slice(1), io);
+	if (argv[0] === "owner-feed")
+		return runOwnerFeedCli(argv.slice(1), io, platform);
 
 	if (argv[0] === "viewer") return runViewerCli(argv.slice(1), io);
 

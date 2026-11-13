@@ -33,7 +33,18 @@ import {
 import { objectOf, parseJson } from "../../../src/core/json.ts";
 import type { JsonValue } from "../../../src/core/json.ts";
 import { runCli } from "../../../host/cli/index.ts";
-import { digestOf } from "../../../src/core/run.ts";
+import { digestOf, runIdOf } from "../../../src/core/run.ts";
+import {
+	admitTicket,
+	fileAdmissionStore,
+} from "../../../src/trust/admission.ts";
+import { EXE_DEV_PLATFORM, isRepoSlug } from "../../../src/trust/platform.ts";
+import {
+	FakeGitHub,
+	fakeIssue,
+	labelEvent,
+	FAKE_REPO,
+} from "../../fake-ticket-adapter.ts";
 import { AUTONOMY_DIGEST } from "../../../src/ledger/schema.ts";
 import { candidateLifecycleFixture, withUmask } from "../../helpers.ts";
 import {
@@ -407,6 +418,136 @@ test("feed refuses public and symlinked private admission, status and verdict pa
 			feed.entries.find((entry) => entry.runId === runId)?.title,
 			"Title unavailable",
 		);
+	});
+});
+
+for (const [name, body, expected] of [
+	["absent", "No marker", null],
+	["valid", "Request\n<!-- factory-intake: chat-1234 -->\n", "chat-1234"],
+	["malformed", "<!-- factory-intake: short -->", null],
+	[
+		"duplicate",
+		"<!-- factory-intake: chat-1234 -->\n<!-- factory-intake: chat-5678 -->",
+		null,
+	],
+	["inline", "Text <!-- factory-intake: chat-1234 -->", null],
+	["HTML", "<!-- factory-intake: <b>chat-1234</b> -->", null],
+	[
+		"Markdown",
+		"<!-- factory-intake: [chat-1234](https://example.com) -->",
+		null,
+	],
+] as const) {
+	test(`intakeRef strict admitted marker: ${name}`, async () => {
+		await state(async (root) => {
+			const runId = await addRun(root, 30, "running", { body });
+			const feed = await readOwnerFeed({ stateDir: root, repo, now });
+			assert.equal(
+				feed.entries.find((entry) => entry.runId === runId)?.intakeRef,
+				expected,
+			);
+			assert.equal(
+				feed.gaps.includes(`duplicate_intake_marker:${runId.slice(0, 12)}`),
+				name === "duplicate",
+			);
+		});
+	});
+}
+
+test("intakeRef stays bound to admission when the current GitHub issue body changes", async () => {
+	await state(async (root) => {
+		assert.ok(isRepoSlug(FAKE_REPO));
+		const github = new FakeGitHub();
+
+		const issue = fakeIssue(30, {
+			body: "No marker at label time",
+			timeline: [
+				labelEvent({
+					id: 100,
+					at: "2026-10-29T01:21:37Z",
+					actor: "giuseppecrj",
+				}),
+			],
+		});
+
+		github.add(issue);
+
+		const receipt = await admitTicket({
+			platform: EXE_DEV_PLATFORM,
+			exec: github.exec,
+			env: () => "/home/exedev",
+			repo: FAKE_REPO,
+			issue: 30,
+			allowlist: EXE_DEV_PLATFORM.repositories,
+			store: fileAdmissionStore(root),
+		});
+
+		assert.equal(receipt.decision, "admitted", JSON.stringify(receipt));
+		const runId = runIdOf({ repo: FAKE_REPO, issue: 30, eventId: "100" });
+		await save(root, ["claims", `${runId}.json`], {
+			repo: FAKE_REPO,
+			runId,
+			issue: 30,
+			eventId: "100",
+			seq: 1,
+			status: "running",
+			stage: "specify",
+			enteredAt: now,
+		});
+		github.add({ ...issue, body: "<!-- factory-intake: late-1234 -->" });
+		const calls = github.calls.length;
+		let output = "";
+		assert.equal(
+			await runCli(
+				["owner-feed", "--json", "--state-dir", root, "--repo", FAKE_REPO],
+				{
+					readPlatformFile: noPlatformFile,
+					exec: github.exec,
+					env: () => undefined,
+					stdout: (text) => {
+						output += text;
+					},
+					stderr: assert.fail,
+				},
+			),
+			0,
+		);
+		assert.equal(JSON.parse(output).entries[0].intakeRef, null);
+		assert.equal(github.calls.length, calls);
+	});
+});
+
+test("repositories comes from the selected platform profile, even for an empty feed", async () => {
+	await state(async (root) => {
+		await rm(join(root, "claims"), { recursive: true });
+		await mkdir(join(root, "claims"), { mode: 0o700 });
+		let output = "";
+		assert.equal(
+			await runCli(["owner-feed", "--json", "--state-dir", root], {
+				readPlatformFile: async () => ({
+					kind: "present",
+					text: JSON.stringify({
+						version: 1,
+						platform: "exe-dev",
+						repositories: ["nublai/one", "nublai/two"],
+					}),
+				}),
+				exec: async () => {
+					throw new Error("no transport");
+				},
+				env: () => undefined,
+				stdout: (text) => {
+					output += text;
+				},
+				stderr: assert.fail,
+			}),
+			0,
+		);
+		assert.deepEqual(JSON.parse(output).repositories, [
+			"nublai/one",
+			"nublai/two",
+		]);
+		assert.deepEqual(JSON.parse(output).entries, []);
 	});
 });
 

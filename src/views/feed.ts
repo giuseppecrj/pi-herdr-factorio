@@ -51,6 +51,7 @@ export type FeedEntry = AttentionRun & {
 export type OwnerFeed = {
 	version: 1;
 	repo: RepoSlug | null;
+	repositories: readonly RepoSlug[];
 	at: number;
 	controller: {
 		state: string;
@@ -533,6 +534,7 @@ export async function ownerFeed(input: {
 	stateDir: string;
 	repo?: RepoSlug | null;
 	now: number;
+	repositories?: readonly RepoSlug[];
 	controller: ControllerReads;
 	host: RunReads;
 }): Promise<OwnerFeed> {
@@ -624,6 +626,7 @@ export async function ownerFeed(input: {
 	return {
 		version: 1,
 		repo,
+		repositories: input.repositories ?? [],
 		at: now,
 		controller: header.controller,
 		durableUsage: durableUsageOf(status?.durableUsage),

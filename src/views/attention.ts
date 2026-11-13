@@ -59,6 +59,7 @@ export type AttentionRun = AttentionEntry &
 	Readonly<{
 		issue: number;
 		eventId: string;
+		intakeRef: string | null;
 		stage: string;
 		since: number | null;
 		terminal: boolean;
@@ -445,6 +446,20 @@ function feedbackHolds(
 	return holds;
 }
 
+function intakeOf(body: string) {
+	const markers = body.match(/<!--\s*factory-intake\b/g) ?? [];
+
+	const match = body
+		.split(/\r?\n/)
+		.map((line) => /^<!-- factory-intake: ([A-Za-z0-9-]{8,64}) -->$/.exec(line))
+		.find((value) => value !== null);
+
+	return {
+		ref: markers.length === 1 ? (match?.[1] ?? null) : null,
+		duplicate: markers.length > 1,
+	};
+}
+
 export async function readAttention(input: {
 	stateDir: string | null;
 	repo: RepoSlug | null;
@@ -631,12 +646,20 @@ export async function readAttention(input: {
 					})
 				: ({ kind: "unreadable" } as const);
 
+			const intakeRef = intakeOf(
+				snapshot.kind === "found" ? snapshot.snapshot.body : "",
+			);
+
+			if (intakeRef.duplicate)
+				gaps.push(`duplicate_intake_marker:${claim.runId.slice(0, 12)}`);
+
 			const ageMs =
 				since === null || since > input.now ? null : input.now - since;
 
 			const entry: AttentionRun = {
 				issue: claim.issue,
 				eventId: claim.eventId,
+				intakeRef: intakeRef.ref,
 				stage: claim.stage,
 				since,
 				terminal: claim.terminal,
@@ -683,6 +706,7 @@ export async function readAttention(input: {
 			const entry: AttentionRun = {
 				issue: hold.issue,
 				eventId: hold.eventId,
+				intakeRef: null,
 				stage: "admit",
 				since: hold.since,
 				terminal: false,
