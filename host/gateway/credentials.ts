@@ -535,19 +535,32 @@ const JSON_ESCAPES = new Map<string, number>([
 	["t", 0x09],
 ]);
 
-function hexAt(bytes: Buffer, at: number, length: number): number | null {
-	const text = bytes.toString("latin1", at, at + length);
+const HEX_DIGITS = "0123456789abcdef";
 
-	return text.length === length && /^[0-9A-Fa-f]+$/.test(text)
-		? Number.parseInt(text, 16)
-		: null;
+function hexAt(bytes: Buffer, at: number, length: number): number | null {
+	if (at + length > bytes.length) return null;
+
+	let value = 0;
+
+	for (let index = at; index < at + length; index += 1) {
+		const digit = HEX_DIGITS.indexOf(
+			String.fromCharCode(bytes[index] ?? 0).toLowerCase(),
+		);
+
+		if (digit < 0) return null;
+
+		value = value * 16 + digit;
+	}
+
+	return value;
 }
 
 /** The bytes with JSON string escapes decoded. Anything that is not an escape is kept. */
 export function jsonUnescaped(bytes: Buffer): Buffer {
 	if (!bytes.includes(0x5c)) return bytes;
 
-	const out: Buffer[] = [];
+	const out = Buffer.alloc(bytes.length);
+	let size = 0;
 	let start = 0;
 	let at = bytes.indexOf(0x5c);
 
@@ -557,12 +570,11 @@ export function jsonUnescaped(bytes: Buffer): Buffer {
 		const unit = next === "u" ? hexAt(bytes, at + 2, 4) : null;
 
 		if (simple !== undefined || unit !== null) {
-			out.push(bytes.subarray(start, at));
-			out.push(
+			size += bytes.copy(out, size, start, at);
+			size =
 				simple !== undefined
-					? Buffer.from([simple])
-					: Buffer.from(String.fromCharCode(unit ?? 0), "utf8"),
-			);
+					? out.writeUInt8(simple, size)
+					: size + out.write(String.fromCharCode(unit ?? 0), size, "utf8");
 			start = at + (simple !== undefined ? 2 : 6);
 			at = bytes.indexOf(0x5c, start);
 		} else {
@@ -570,60 +582,76 @@ export function jsonUnescaped(bytes: Buffer): Buffer {
 		}
 	}
 
-	out.push(bytes.subarray(start));
+	size += bytes.copy(out, size, start);
 
-	return Buffer.concat(out);
+	return out.subarray(0, size);
 }
 
 /** The bytes with every `%XX` decoded. Anything else is kept. */
 export function percentDecoded(bytes: Buffer): Buffer {
 	if (!bytes.includes(0x25)) return bytes;
 
-	const out: number[] = [];
+	const out = Buffer.alloc(bytes.length);
+	let size = 0;
 
 	for (let at = 0; at < bytes.length; at += 1) {
 		const byte = bytes[at] ?? 0;
 		const value = byte === 0x25 ? hexAt(bytes, at + 1, 2) : null;
 
-		if (value === null) {
-			out.push(byte);
-		} else {
-			out.push(value);
-			at += 2;
+		out[size] = value ?? byte;
+		size += 1;
+		at += value === null ? 0 : 2;
+	}
+
+	return out.subarray(0, size);
+}
+
+/** A byte-for-byte translation table: each byte's replacement, or -1 to drop it. */
+function byteTable(map: (byte: number) => number | null): Int16Array {
+	return Int16Array.from({ length: 256 }, (_, byte) => map(byte) ?? -1);
+}
+
+const WITHOUT_WHITESPACE = byteTable((byte) =>
+	[0x09, 0x0a, 0x0d, 0x20].includes(byte) ? null : byte,
+);
+
+const LOWER_CASED = byteTable((byte) =>
+	byte >= 0x41 && byte <= 0x5a ? byte + 0x20 : byte,
+);
+
+const BASE64_ONLY = byteTable((byte) =>
+	/[0-9A-Za-z+\-/=_]/.test(String.fromCharCode(byte)) ? byte : null,
+);
+
+function translated(bytes: Buffer, table: Int16Array): Buffer {
+	const out = Buffer.alloc(bytes.length);
+	let size = 0;
+
+	for (let at = 0; at < bytes.length; at += 1) {
+		const value = table[bytes[at] ?? 0] ?? -1;
+
+		if (value >= 0) {
+			out[size] = value;
+			size += 1;
 		}
 	}
 
-	return Buffer.from(out);
-}
-
-/**
- * The bytes rewritten by a regular expression over their Latin-1 text. Latin-1
- * maps each byte to one code unit and back, so only the matched bytes change.
- */
-function rewritten(
-	bytes: Buffer,
-	pattern: RegExp,
-	replace: (match: string) => string,
-): Buffer {
-	return Buffer.from(
-		bytes.toString("latin1").replace(pattern, replace),
-		"latin1",
-	);
+	return out.subarray(0, size);
 }
 
 /** The bytes with ASCII whitespace removed, so wrapped base64 reads whole. */
 function withoutWhitespace(bytes: Buffer): Buffer {
-	return rewritten(bytes, /[\t\n\r ]+/g, () => "");
+	return translated(bytes, WITHOUT_WHITESPACE);
 }
 
 /** The bytes with ASCII capitals lowered, so mixed-case hex reads as the lower-case form. */
 function lowerCased(bytes: Buffer): Buffer {
-	return rewritten(bytes, /[A-Z]+/g, (match) => match.toLowerCase());
+	return translated(bytes, LOWER_CASED);
 }
 
 /** The bytes outside the base64 and base64url alphabets removed, as Node's decoder skips them. */
 function base64Only(bytes: Buffer): Buffer {
-	return rewritten(bytes, /[^0-9A-Za-z+\-/=_]+/g, () => "");
+	return translated(bytes, BASE64_ONLY);
 }
 
 /**
@@ -706,6 +734,8 @@ export type FilterStep =
 
 const MAGIC_PROBE_BYTES = 4;
 
+const FIRST_BODY_BYTES = 64 * 1024;
+
 /**
  * True when a body starts like gzip, framed brotli or zstd data, which the
  * reflection scan cannot read whatever `Content-Encoding` says. A zlib
@@ -747,9 +777,10 @@ const C1_CONTROL = /[\u0080-\u009f]/;
  * no byte of it leaves before the decision. Every byte must be UTF-8 text
  * with no control character, ASCII or C1, but tab, line feed, form feed and
  * carriage return, because compressed data, framed or not and at any
- * offset, is not text. A body over `cap` bytes is blocked as soon as it
- * passes the cap, and its bytes are dropped, so memory per body stays
- * bounded by the cap.
+ * offset, is not text. The body is copied into one buffer that doubles as
+ * it fills and never grows past `cap`. A body over `cap` bytes is blocked as
+ * soon as it passes the cap. `end` and a refusal drop every byte the filter
+ * held, so `retained` is then zero.
  *
  * `push` also refuses early, before the body ends: on compression magic in
  * the first four bytes, on a byte that is not text, and on a secret found
@@ -769,7 +800,7 @@ export class ReflectionFilter {
 	readonly #utf8 = new TextDecoder("utf-8", { fatal: true });
 	#held: Buffer = Buffer.alloc(0);
 	#alphabet: Buffer = Buffer.alloc(0);
-	#body: Buffer[] = [];
+	#body: Buffer | null = null;
 	#size = 0;
 	#probed = false;
 	#refused = false;
@@ -783,12 +814,42 @@ export class ReflectionFilter {
 		this.#cap = cap;
 	}
 
+	/** Bytes held between calls: the body buffer's capacity and the scan tails. */
+	get retained(): number {
+		return (
+			(this.#body?.length ?? 0) + this.#held.length + this.#alphabet.length
+		);
+	}
+
+	#release(): void {
+		this.#body = null;
+		this.#held = Buffer.alloc(0);
+		this.#alphabet = Buffer.alloc(0);
+	}
+
 	#blocked(): FilterStep {
 		this.#refused = true;
-		this.#body = [];
-		this.#held = Buffer.alloc(0);
+		this.#release();
 
 		return { kind: "blocked" };
+	}
+
+	#keep(chunk: Buffer): void {
+		const size = this.#size + chunk.length;
+		let body = this.#body ?? Buffer.alloc(0);
+
+		if (body.length < size) {
+			const grown = Buffer.alloc(
+				Math.min(this.#cap, Math.max(size, body.length * 2, FIRST_BODY_BYTES)),
+			);
+
+			body.copy(grown, 0, 0, this.#size);
+			body = grown;
+		}
+
+		chunk.copy(body, this.#size);
+		this.#body = body;
+		this.#size = size;
 	}
 
 	#text(chunk: Buffer, final: boolean): boolean {
@@ -805,8 +866,8 @@ export class ReflectionFilter {
 	#alphabetReveals(unread: Buffer): boolean {
 		const alphabet = Buffer.concat([this.#alphabet, base64Only(unread)]);
 
-		this.#alphabet = alphabet.subarray(
-			Math.max(0, alphabet.length - this.#scanner.longest),
+		this.#alphabet = Buffer.from(
+			alphabet.subarray(Math.max(0, alphabet.length - this.#scanner.longest)),
 		);
 
 		return this.#scanner.contains(alphabet);
@@ -815,11 +876,11 @@ export class ReflectionFilter {
 	push(chunk: Buffer): FilterStep {
 		const nothing: FilterStep = { kind: "pass", bytes: Buffer.alloc(0) };
 
-		this.#size += chunk.length;
+		if (this.#refused || this.#size + chunk.length > this.#cap) {
+			return this.#blocked();
+		}
 
-		if (this.#refused || this.#size > this.#cap) return this.#blocked();
-
-		this.#body.push(chunk);
+		this.#keep(chunk);
 
 		const joined = Buffer.concat([this.#held, chunk]);
 		let unread = chunk;
@@ -845,17 +906,18 @@ export class ReflectionFilter {
 			return this.#blocked();
 		}
 
-		this.#held = joined.subarray(Math.max(0, joined.length - this.#hold));
+		this.#held = Buffer.from(
+			joined.subarray(Math.max(0, joined.length - this.#hold)),
+		);
 
 		return nothing;
 	}
 
 	end(): FilterStep {
-		const body = Buffer.concat(this.#body);
+		const body = (this.#body ?? Buffer.alloc(0)).subarray(0, this.#size);
 		const unread = this.#probed ? Buffer.alloc(0) : this.#held;
 
-		this.#body = [];
-		this.#held = Buffer.alloc(0);
+		this.#release();
 
 		if (
 			this.#refused ||
