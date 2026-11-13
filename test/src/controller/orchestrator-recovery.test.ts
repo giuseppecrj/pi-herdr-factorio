@@ -2063,7 +2063,7 @@ describe("Orchestrator admissions recorded for a bot-applied ready event", () =>
 		}
 	}
 
-	for (const actorType of [1, {}, null, ""]) {
+	for (const actorType of [1, {}, ""]) {
 		it(`waits without launching when stored actor type is ${JSON.stringify(actorType)}`, async () => {
 			const ctx = world();
 			const state = stateDir();

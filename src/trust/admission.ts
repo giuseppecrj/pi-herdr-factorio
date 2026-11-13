@@ -414,7 +414,9 @@ export function parseRecord(
 		!isTimestamp(eventAt) ||
 		actor === null ||
 		!isLogin(actor) ||
-		(rawActorType !== undefined && (actorType === null || actorType === "")) ||
+		(rawActorType !== undefined &&
+			rawActorType !== null &&
+			(actorType === null || actorType === "")) ||
 		level === null ||
 		!hasWriteAccess(level) ||
 		digest === null ||

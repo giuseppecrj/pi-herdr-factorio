@@ -361,7 +361,7 @@ GitHub sends an empty body as `null`, in REST and in GraphQL, for the current bo
 
 An admission writes `<state-dir>/admissions/github/<owner>/<name>/<issue>/<event-id>.json` with mode 0600, in directories created with mode 0700. It holds the receipt and the snapshot title and body. The record is first written to a temporary file, `.<event-id>.<random>.tmp`, in the same directory, and then hard-linked to its final name, so a record is never seen half-written. The temporary file is removed whatever the outcome. The link fails when the final name exists, so a second admission of the same event is refused as `duplicate_event`. When a directory cannot be created, including when a file sits where a directory belongs, or the temporary file cannot be written, the refusal is `state_unwritable`. A refusal writes nothing.
 
-New admitted receipts also store `actorType`, GitHub's account type for the label actor, or `null` when unavailable. Old records without it remain readable and treat the type as unknown. An explicit `null`, an empty string or a non-string stored type makes the record unreadable; recovery waits without launching. The field does not appear in OwnerFeed v1, whose contract and captures are unchanged.
+New admitted receipts also store `actorType`, GitHub's account type for the label actor, or `null` when unavailable. Old records without it remain readable and treat the type as unknown. A stored `null` means unknown, as when GitHub omits the type. An empty string or a non-string stored type makes the record unreadable; recovery waits without launching. The field does not appear in OwnerFeed v1, whose contract and captures are unchanged.
 
 Admission already refuses Bot-typed actors before storing a record. A stored `Bot` type therefore arises only if a future admission change or a GitHub type change lets one through. The recovery check is defense in depth and adds no GitHub lookup. Production `nubl-factory` has no stored admissions, checked read-only on 2026-11-13 with `runs=0`, so no record written by pre-#771 code exists there.
 
@@ -377,7 +377,7 @@ Admission already refuses Bot-typed actors before storing a record. A stored `Bo
 | `eventId` | string or `null` | The admitted or examined label event's ID. |
 | `eventAt` | string or `null` | That event's `created_at`. |
 | `actor` | string or `null` | That event's actor login. A login that does not match GitHub's login grammar is printed as `(withheld)`. |
-| `actorType` | optional string or `null` | The label actor's GitHub account type. New admitted receipts include it; refused receipts and old admission records omit it. Missing means unknown. An explicit `null`, an empty string or a non-string makes a stored record unreadable. |
+| `actorType` | optional string or `null` | The label actor's GitHub account type. New admitted receipts include it; refused receipts and old admission records omit it. Missing or `null` means unknown. An empty string or a non-string makes a stored record unreadable. |
 | `actorPermission` | string or `null` | The `permission` GitHub reports for the actor: `admin`, `maintain`, `write`, `triage`, `read` or `none`. An admitted receipt has only `admin`, `maintain` or `write`. GitHub folds `maintain` into `write` and `triage` into `read` in this field, so in practice it is `admin`, `write`, `read` or `none`. |
 | `snapshotDigest` | string or `null` | Described under snapshot. |
 | `snapshotSource` | string or `null` | `unedited` or `edit_history`. |
