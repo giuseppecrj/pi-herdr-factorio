@@ -46,6 +46,14 @@ import {
 	FAKE_REPO,
 } from "../../fake-ticket-adapter.ts";
 import { AUTONOMY_DIGEST } from "../../../src/ledger/schema.ts";
+import { postQuestions } from "../../../src/controller/effects.ts";
+import { questionsDigestOf } from "../../../src/contract/contract.ts";
+import { questionsKey } from "../../../src/contract/render.ts";
+import {
+	GitHubTicketAdapter,
+	GitHubTicketWriter,
+} from "../../../src/github/adapter.ts";
+import { fileRunFiles } from "../../../host/controller/run-files.ts";
 import { candidateLifecycleFixture, withUmask } from "../../helpers.ts";
 import {
 	addRun,
@@ -548,6 +556,181 @@ test("repositories comes from the selected platform profile, even for an empty f
 			"nublai/two",
 		]);
 		assert.deepEqual(JSON.parse(output).entries, []);
+	});
+});
+
+async function prepareQuestions(root: string) {
+	const runId = await addRun(root, 30, "needs_info");
+	const github = new FakeGitHub(repo);
+	const issue = github.add(fakeIssue(30));
+	const files = fileRunFiles(root);
+	const questions = [{ text: "Which behavior?", cites: [] }];
+	const digest = questionsDigestOf(questions);
+	assert.equal(await files.writeQuestions({ runId, digest, questions }), true);
+
+	const adapter = new GitHubTicketAdapter({
+		exec: github.exec,
+		repo,
+		paging: { pageSize: 100, maxPages: 10 },
+	});
+
+	const writer = new GitHubTicketWriter({ exec: github.exec, repo });
+	const run = { runId, issue: 30 };
+	const body = `Questions\n\n${questionsKey(runId, digest)}`;
+
+	const post = () =>
+		postQuestions(
+			{ platform: EXE_DEV_PLATFORM, log: () => {}, files },
+			adapter,
+			writer,
+			run,
+			digest,
+			body,
+		);
+
+	assert.equal(await post(), true);
+	const comment = issue.comments[0];
+	assert.ok(comment !== undefined);
+
+	return {
+		runId,
+		github,
+		issue,
+		files,
+		post,
+		comment,
+		reference: join(root, "contracts", runId, "questions-comment.json"),
+		url: `https://github.com/${repo}/issues/30#issuecomment-${comment.id}`,
+	};
+}
+
+test("questionsUrl is captured from the trusted comment and recovered after a missing receipt without another post", async () => {
+	await state(async (root) => {
+		const asked = await prepareQuestions(root);
+		assert.equal(
+			(await readOwnerFeed({ stateDir: root, repo, now })).entries.find(
+				(entry) => entry.runId === asked.runId,
+			)?.questionsUrl,
+			asked.url,
+		);
+		await rm(asked.reference);
+		assert.equal(await asked.post(), true);
+		assert.equal(asked.issue.comments.length, 1);
+		let output = "";
+		assert.equal(
+			await runCli(["owner-feed", "--json", "--state-dir", root], {
+				readPlatformFile: noPlatformFile,
+				exec: async () => {
+					throw new Error("feed must stay offline");
+				},
+				env: () => undefined,
+				stdout: (text) => {
+					output += text;
+				},
+				stderr: assert.fail,
+			}),
+			0,
+		);
+		assert.equal(
+			JSON.parse(output).entries.find(
+				(entry: FeedEntry) => entry.runId === asked.runId,
+			).questionsUrl,
+			asked.url,
+		);
+	});
+});
+
+for (const defect of ["type", "app", "scope", "edited", "duplicate"] as const) {
+	test(`questionsUrl rejects a controller comment with invalid ${defect}`, async () => {
+		await state(async (root) => {
+			const asked = await prepareQuestions(root);
+			await rm(asked.reference);
+
+			if (defect === "type") asked.comment.type = "User";
+
+			if (defect === "app") asked.comment.appSlug = "other-app";
+
+			if (defect === "scope")
+				asked.comment.issueUrl = `https://api.github.com/repos/${repo}/issues/999`;
+
+			if (defect === "edited")
+				asked.comment.lastEditedAt = "2026-10-29T02:00:00Z";
+
+			if (defect === "duplicate")
+				asked.issue.comments.push({
+					...asked.comment,
+					id: asked.comment.id + 1,
+					nodeId: "duplicate-node",
+				});
+			assert.equal(await asked.post(), true);
+			assert.equal(
+				(await readOwnerFeed({ stateDir: root, repo, now })).entries.find(
+					(entry) => entry.runId === asked.runId,
+				)?.questionsUrl,
+				null,
+			);
+		});
+	});
+}
+
+test("questionsUrl ignores forged issue text and comments from other authors", async () => {
+	await state(async (root) => {
+		const asked = await prepareQuestions(root);
+		await rm(asked.reference);
+		asked.comment.login = "attacker";
+		asked.comment.body = `https://evil.example/questions\n${asked.comment.body}`;
+		assert.equal(await asked.post(), true);
+		const trusted = asked.issue.comments.at(-1);
+		assert.ok(trusted !== undefined);
+		assert.equal(asked.issue.comments.length, 2);
+		assert.equal(
+			(await readOwnerFeed({ stateDir: root, repo, now })).entries.find(
+				(entry) => entry.runId === asked.runId,
+			)?.questionsUrl,
+			`https://github.com/${repo}/issues/30#issuecomment-${trusted.id}`,
+		);
+	});
+});
+
+test("questionsUrl requires matching private receipt bindings and is null outside needs_info", async () => {
+	await state(async (root) => {
+		const asked = await prepareQuestions(root);
+		const reference = JSON.parse(await readFile(asked.reference, "utf8"));
+
+		const entry = async () =>
+			(await readOwnerFeed({ stateDir: root, repo, now })).entries.find(
+				(item) => item.runId === asked.runId,
+			);
+
+		for (const change of [
+			{ runId: digestOf("other") },
+			{ repo: "other/repo" },
+			{ issue: 99 },
+			{ digest: digestOf("other") },
+			{ commentId: "1#https://evil.example" },
+		]) {
+			await save(root, ["contracts", asked.runId, "questions-comment.json"], {
+				...reference,
+				...change,
+			});
+			assert.equal((await entry())?.questionsUrl, null);
+		}
+
+		await save(root, ["contracts", asked.runId, "questions-comment.json"], {
+			...reference,
+			url: "https://evil.example",
+		});
+		assert.equal((await entry())?.questionsUrl, asked.url);
+		await chmod(asked.reference, 0o644);
+		assert.equal((await entry())?.questionsUrl, null);
+		await chmod(asked.reference, 0o600);
+		await addRun(root, 30, "running", { eventId: "2" });
+		assert.equal(
+			(await readOwnerFeed({ stateDir: root, repo, now })).entries.find(
+				(item) => item.issue === 30,
+			)?.questionsUrl,
+			null,
+		);
 	});
 });
 

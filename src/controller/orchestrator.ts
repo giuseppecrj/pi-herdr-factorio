@@ -52,7 +52,6 @@ import {
 	acceptanceKey,
 	buildKey,
 	contractKey,
-	questionsKey,
 	renderAcceptanceSummary,
 	renderBuildSummary,
 } from "../contract/render.ts";
@@ -162,7 +161,13 @@ import {
 	writeClaim,
 	writeEnded,
 } from "./claims.ts";
-import { type Effects, accepted, postKeyed, specified } from "./effects.ts";
+import {
+	type Effects,
+	accepted,
+	postKeyed,
+	postQuestions,
+	specified,
+} from "./effects.ts";
 import {
 	type ReviewPreparation,
 	type StageEnd,
@@ -5233,12 +5238,12 @@ export class Orchestrator {
 			return false;
 		}
 
-		effects.posted ||= await postKeyed(
+		effects.posted ||= await postQuestions(
 			this.#input,
 			this.#adapter,
 			this.#writer,
 			run,
-			questionsKey(run.runId, effects.digest),
+			effects.digest,
 			effects.body,
 		);
 

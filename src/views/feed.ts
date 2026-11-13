@@ -39,6 +39,7 @@ export type DisplayGroup = "needs_you" | "failed" | "working" | "done";
 
 export type FeedEntry = AttentionRun & {
 	group: DisplayGroup;
+	questionsUrl: string | null;
 	round: number | null;
 	tokens: number | null;
 	cap: number | null;
@@ -264,6 +265,42 @@ async function stepReceipts(
 	return steps;
 }
 
+async function questionsUrl(
+	root: string,
+	entry: AttentionRun,
+): Promise<string | null> {
+	if (entry.kind !== "question_asked" || entry.status !== "needs_info")
+		return null;
+
+	const reference = objectOf(
+		await localJson(root, "contracts", entry.runId, "questions-comment.json"),
+	);
+
+	const questions = objectOf(
+		await localJson(root, "contracts", entry.runId, "questions.json"),
+	);
+
+	const repo = textOf(reference?.repo);
+	const commentId = textOf(reference?.commentId);
+	const digest = textOf(reference?.digest);
+
+	return reference?.version === 1 &&
+		reference.runId === entry.runId &&
+		reference.issue === entry.issue &&
+		repo !== null &&
+		isRepoSlug(repo) &&
+		entry.issueUrl === `https://github.com/${repo}/issues/${entry.issue}` &&
+		commentId !== null &&
+		/^[1-9][0-9]{0,19}$/.test(commentId) &&
+		digest !== null &&
+		isDigest(digest) &&
+		questions?.version === 1 &&
+		questions.runId === entry.runId &&
+		questions.digest === digest
+		? `${entry.issueUrl}#issuecomment-${commentId}`
+		: null;
+}
+
 async function detail(
 	root: string,
 	entry: AttentionRun,
@@ -448,6 +485,7 @@ async function detail(
 		since,
 		ageMs: since === null || since > now ? null : now - since,
 		group,
+		questionsUrl: await questionsUrl(root, entry),
 		round: projection?.round ?? countOf(raw?.round),
 		tokens: book === null ? countOf(raw?.usage) : candidateUsage(book),
 		cap,

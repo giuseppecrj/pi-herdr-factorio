@@ -65,6 +65,7 @@ const ENTRY = {
 	issue: "number",
 	eventId: "string",
 	intakeRef: "string|null",
+	questionsUrl: "string|null",
 	stage: "string",
 	since: "number|null",
 	terminal: "boolean",

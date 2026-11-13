@@ -727,6 +727,33 @@ describe("specify: questions", () => {
 		assert.equal(first.totals.usage, 300);
 		assert.equal(files.contracts.size, 0);
 		assert.ok(files.questions.has(runOf(14)));
+		assert.deepEqual(
+			JSON.parse(
+				readFileSync(
+					join(
+						files.artifactRoot,
+						"contracts",
+						runOf(14),
+						"questions-comment.json",
+					),
+					"utf8",
+				),
+			),
+			{
+				version: 1,
+				runId: runOf(14),
+				repo,
+				issue: 14,
+				digest: files.questions.get(runOf(14)),
+				commentId: String(
+					github.issues
+						.get(14)
+						?.comments.find((comment) =>
+							comment.body.includes("<!-- factory-questions "),
+						)?.id,
+				),
+			},
+		);
 
 		const [asked] = keyed(github, 14, "questions");
 

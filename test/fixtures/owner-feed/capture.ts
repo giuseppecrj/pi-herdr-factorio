@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { AttentionKind } from "../../../src/views/attention.ts";
+import { fileRunFiles } from "../../../host/controller/run-files.ts";
+import { questionsDigestOf } from "../../../src/contract/contract.ts";
 import {
 	addAnsweredRun,
 	addFailedRun,
@@ -12,6 +14,7 @@ import {
 	addWaitingRun,
 	emptyState,
 	now,
+	repo,
 	save,
 } from "./state.ts";
 
@@ -39,9 +42,21 @@ export type CaptureName = (typeof CAPTURE_NAMES)[number];
 
 const BUILDERS = {
 	question_asked: async (root) => {
-		await addRun(root, 11, "needs_info", {
+		const runId = await addRun(root, 11, "needs_info", {
 			title: "Ask before changing the product",
 			stage: "specify",
+		});
+
+		const files = fileRunFiles(root);
+		const questions = [{ text: "Which behavior?", cites: [] }];
+		const digest = questionsDigestOf(questions);
+		await files.writeQuestions({ runId, questions, digest });
+		await files.writeQuestionsComment({
+			runId,
+			repo,
+			issue: 11,
+			digest,
+			commentId: "12345678",
 		});
 	},
 	question_answered: async (root) => {

@@ -30,6 +30,7 @@
 			"ageMs": 345600000,
 			"reason": null,
 			"group": "needs_you",
+			"questionsUrl": null,
 			"round": 0,
 			"tokens": 40,
 			"cap": 800000,

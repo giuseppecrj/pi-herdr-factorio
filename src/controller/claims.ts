@@ -119,6 +119,13 @@ export interface RunFiles {
 		readonly questions: readonly Question[];
 		readonly digest: QuestionsDigest;
 	}): Promise<boolean>;
+	writeQuestionsComment(input: {
+		readonly runId: Digest;
+		readonly repo: RepoSlug;
+		readonly issue: number;
+		readonly digest: QuestionsDigest;
+		readonly commentId: string;
+	}): Promise<boolean>;
 	/** The link and answers are written before the claim, so they may be replaced until then. */
 	writeLink(runId: Digest, link: Link | null): Promise<boolean>;
 	readLink(runId: Digest): Promise<LinkRead>;
