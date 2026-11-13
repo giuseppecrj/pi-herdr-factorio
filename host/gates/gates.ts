@@ -53,7 +53,7 @@ import {
 	testArgv,
 } from "./runner.ts";
 
-const GATE_TEST_CONCURRENCY = 2;
+const GATE_TEST_CONCURRENCY = 3;
 
 type GateCheck = {
 	readonly name: string;

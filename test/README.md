@@ -1,6 +1,6 @@
 # test
 
-`npm test` runs `test/src/**/*.test.ts` and `test/host/**/*.test.ts`. The recursive globs are quoted so Node, rather than the shell, expands them at every depth. `npm run test:integration` runs `test/integration/*.test.ts` separately. `npm test` uses concurrency 2, matching the trusted gate. Integration tests keep concurrency 1. The trusted gate uses those same three globs from `.github/factory/gates/gates.json` at concurrency 2. `npm run check:layout` checks their parity and rejects executable tests outside discovery.
+`npm test` runs `test/src/**/*.test.ts` and `test/host/**/*.test.ts`. The recursive globs are quoted so Node, rather than the shell, expands them at every depth. `npm run test:integration` runs `test/integration/*.test.ts` separately. `npm test` uses concurrency 2. Integration tests keep concurrency 1. The trusted gate uses those same three globs from `.github/factory/gates/gates.json` at concurrency 3. `npm run check:layout` checks their parity and rejects executable tests outside discovery.
 
 | Path | What it holds |
 | --- | --- |

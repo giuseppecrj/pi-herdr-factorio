@@ -1583,7 +1583,7 @@ test("main's baseline test run gets 180 seconds and candidates three times its m
 		);
 });
 
-test("trusted test concurrency is step-specific and preserves baseline/main counts at concurrency 2", async (t) => {
+test("trusted test concurrency is step-specific and preserves baseline/main counts at concurrency 3", async (t) => {
 	const f = repo(t);
 	f.put(
 		"test/src/example/slow.test.ts",
@@ -1646,11 +1646,11 @@ test("trusted test concurrency is step-specific and preserves baseline/main coun
 				args.find((arg) => arg.startsWith("--test-concurrency=")) ?? null,
 		),
 		[
-			"--test-concurrency=2",
+			"--test-concurrency=3",
 			null,
 			null,
 			null,
-			"--test-concurrency=2",
+			"--test-concurrency=3",
 			"--test-concurrency=1",
 			"--test-concurrency=1",
 		],
@@ -1663,7 +1663,7 @@ test("trusted test concurrency is step-specific and preserves baseline/main coun
 });
 
 for (const step of ["main_tests", "candidate_tests", "heldout"]) {
-	test(`test deadline control for ${step} reruns main at concurrency 2 with the same deadline`, async (t) => {
+	test(`test deadline control for ${step} reruns main at concurrency 3 with the same deadline`, async (t) => {
 		const f = repo(t);
 		f.put(
 			"test/new.test.ts",
@@ -1719,7 +1719,7 @@ for (const step of ["main_tests", "candidate_tests", "heldout"]) {
 		);
 		const control = calls.at(-1);
 		assert.ok(control);
-		assert.ok(control.argv.includes("--test-concurrency=2"));
+		assert.ok(control.argv.includes("--test-concurrency=3"));
 		assert.ok(control.argv.includes("test/src/example/value.test.ts"));
 		assert.equal(control.argv.includes("test/new.test.ts"), false);
 		assert.equal(control.argv.includes(path), false);
