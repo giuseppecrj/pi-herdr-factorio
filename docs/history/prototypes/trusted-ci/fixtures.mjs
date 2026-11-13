@@ -1,3 +1,4 @@
+// HISTORICAL (F07b, 2026-10-30): not a maintained tool. Imports of server/ and src/ predate the layout program (docs/history/path-map.md) and no longer resolve, so it does not run today.
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";

@@ -1,3 +1,4 @@
+// HISTORICAL (F07b, 2026-10-30): not a maintained tool. It writes to the old docs/prototypes/ path and no longer runs as written.
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";

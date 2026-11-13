@@ -1,3 +1,4 @@
+// HISTORICAL (F10c, 2026-11-05): not a maintained tool. Imports of server/ and src/ predate the layout program (docs/history/path-map.md) and no longer resolve, so it does not run today.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";

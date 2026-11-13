@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -uo pipefail
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
-export GH_HOST=github.int.exe.xyz
 R=giuseppecrj/pi-herdr-factorio
 out=/tmp/f04c-probe.out
 err=/tmp/f04c-probe.err
