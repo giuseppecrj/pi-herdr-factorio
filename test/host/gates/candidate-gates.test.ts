@@ -1547,7 +1547,7 @@ test("baseline timeout is incomplete; candidate deadlines have measured headroom
 	assert.equal(incomplete.reason, "baseline_deadline");
 });
 
-test("main's baseline test run gets 180 seconds and candidates three times its measured time", async (t) => {
+test("main's baseline test run gets 360 seconds and candidates three times its measured time", async (t) => {
 	const f = repo(t);
 	const deadlines: { tree: string; tests: boolean; deadlineMs?: number }[] = [];
 
@@ -1566,7 +1566,7 @@ test("main's baseline test run gets 180 seconds and candidates three times its m
 
 	const result = await checkCandidate({ ...gateInput(f, f.gateSha), runner });
 	const baseline = deadlines.find((d) => d.tree === "baseline" && d.tests);
-	assert.equal(baseline?.deadlineMs, 180000);
+	assert.equal(baseline?.deadlineMs, 360000);
 
 	const measured =
 		result.checks.find((c) => c.name === "baseline_tests")?.durationMs ?? -1;
@@ -1583,7 +1583,7 @@ test("main's baseline test run gets 180 seconds and candidates three times its m
 		);
 });
 
-test("trusted test concurrency is step-specific and preserves baseline/main counts at concurrency 2", async (t) => {
+test("trusted test concurrency is step-specific and preserves baseline/main counts at concurrency 3", async (t) => {
 	const f = repo(t);
 	f.put(
 		"test/src/example/slow.test.ts",
@@ -1646,24 +1646,24 @@ test("trusted test concurrency is step-specific and preserves baseline/main coun
 				args.find((arg) => arg.startsWith("--test-concurrency=")) ?? null,
 		),
 		[
-			"--test-concurrency=2",
+			"--test-concurrency=3",
 			null,
 			null,
 			null,
-			"--test-concurrency=2",
+			"--test-concurrency=3",
 			"--test-concurrency=1",
 			"--test-concurrency=1",
 		],
 	);
 	const measured = result.checks[0]?.durationMs ?? -1;
-	assert.equal(result.checks[0]?.deadlineMs, 180000);
+	assert.equal(result.checks[0]?.deadlineMs, 360000);
 
 	for (const check of result.checks.slice(1))
 		assert.equal(check.deadlineMs, Math.max(90000, 3 * measured + 30000));
 });
 
 for (const step of ["main_tests", "candidate_tests", "heldout"]) {
-	test(`test deadline control for ${step} reruns main at concurrency 2 with the same deadline`, async (t) => {
+	test(`test deadline control for ${step} reruns main at concurrency 3 with the same deadline`, async (t) => {
 		const f = repo(t);
 		f.put(
 			"test/new.test.ts",
@@ -1719,7 +1719,7 @@ for (const step of ["main_tests", "candidate_tests", "heldout"]) {
 		);
 		const control = calls.at(-1);
 		assert.ok(control);
-		assert.ok(control.argv.includes("--test-concurrency=2"));
+		assert.ok(control.argv.includes("--test-concurrency=3"));
 		assert.ok(control.argv.includes("test/src/example/value.test.ts"));
 		assert.equal(control.argv.includes("test/new.test.ts"), false);
 		assert.equal(control.argv.includes(path), false);

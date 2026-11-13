@@ -446,7 +446,14 @@ describe("replay driver with fake GitHub/controller and real guards", {
 		root = join(dir, "root");
 		lane = join(root, "F12a-replay-c3-w1");
 		active = [];
-		await cp(join(template, "control"), control, { recursive: true });
+		git(
+			template,
+			"clone",
+			"--quiet",
+			"--local",
+			join(template, "control"),
+			control,
+		);
 		const sha = templateSha;
 
 		await mkdir(join(lane, "state"), { recursive: true });
@@ -549,6 +556,7 @@ esac
 
 		env = {
 			...process.env,
+			NODE_COMPILE_CACHE: join(dir, "compile-cache"),
 			GH_HOST: "github.int.exe.invalid",
 			HOME: join(dir, "home"),
 			XDG_RUNTIME_DIR: join(dir, "runtime"),

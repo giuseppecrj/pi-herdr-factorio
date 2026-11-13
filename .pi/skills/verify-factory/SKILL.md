@@ -135,10 +135,10 @@ Copy evidence into `docs/plans/media/<pr-id>/` only when the task authorizes it.
 
 ## Trusted reporter gate
 
-Before merging any factory source PR, run `npm run check` and main's concurrency-2 gate tests locally through the trusted reporter. The following command matches the baseline and main-tree `testArgv` in `host/gates/runner.ts`, called by `host/gates/gates.ts`:
+Before merging any factory source PR, run `npm run check` and main's concurrency-3 gate tests locally through the trusted reporter. The following command matches the baseline and main-tree `testArgv` in `host/gates/runner.ts`, called by `host/gates/gates.ts`:
 
 ```bash
-node --import ./.github/factory/gates/freeze.mjs --experimental-strip-types --test --test-concurrency=2 --test-timeout=60000 --test-reporter ./.github/factory/gates/reporter.mjs 'test/src/**/*.test.ts' 'test/host/**/*.test.ts' test/integration/*.test.ts
+node --import ./.github/factory/gates/freeze.mjs --experimental-strip-types --test --test-concurrency=3 --test-timeout=60000 --test-reporter ./.github/factory/gates/reporter.mjs 'test/src/**/*.test.ts' 'test/host/**/*.test.ts' test/integration/*.test.ts
 ```
 
 The manifest discovers `test/src/**/*.test.ts`, `test/host/**/*.test.ts`, and `test/integration/*.test.ts`. Pass the three globs above. Quote recursive globs so Node expands nested owner folders too. Sandbox suites run directly; do not import them or pass an old aggregator. Keep the caller's umask; tests must pass under both 022 and the stricter 077. The replay driver keeps its own files private under 077 and launches `serve` with the factory unit's effective `UMask`, falling back to 022.

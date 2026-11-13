@@ -53,7 +53,10 @@ import {
 	testArgv,
 } from "./runner.ts";
 
-const GATE_TEST_CONCURRENCY = 2;
+const GATE_TEST_CONCURRENCY = 3;
+
+// Hosted runners need more time for the growing trusted baseline suite.
+const BASELINE_DEADLINE_MS = 360_000;
 
 type GateCheck = {
 	readonly name: string;
@@ -273,7 +276,7 @@ export async function checkCandidate(
 		tree = join(temp, "tree"),
 		gates = join(temp, "gates");
 
-	let deadlineMs = 180000;
+	let deadlineMs = BASELINE_DEADLINE_MS;
 
 	const run = async (name: string, source: string, argv: readonly string[]) => {
 		const began = Date.now();
