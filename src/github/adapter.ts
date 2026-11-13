@@ -279,13 +279,14 @@ export function isBotLogin(login: string): boolean {
 
 function actorOf(value: JsonValue | undefined): Actor {
 	const login = stringOf(pathOf(value, ["login"]));
+	const type = stringOf(pathOf(value, ["type"]));
 
 	return login !== null && isLogin(login)
 		? {
 				kind: "login",
 				login,
-				type: stringOf(pathOf(value, ["type"])),
-				bot: isBotLogin(login) || stringOf(pathOf(value, ["type"])) === "Bot",
+				type,
+				bot: isBotLogin(login) || type === "Bot",
 			}
 		: { kind: "withheld" };
 }

@@ -1691,6 +1691,36 @@ describe("F04c admission carry-overs", () => {
 		});
 	}
 
+	for (const actorType of [1, {}, null, ""]) {
+		it(`treats stored actor type ${JSON.stringify(actorType)} as unreadable`, async () => {
+			const github = new FakeGitHub();
+			const state = stateDir();
+
+			github.add(labeledBy("giuseppecrj"));
+			const receipt = await admit(github, state);
+
+			assert.equal(receipt.decision, "admitted");
+			writeFileSync(
+				join(
+					state,
+					"admissions/github/nublai/pi-herdr-factorio/14/34537521383.json",
+				),
+				JSON.stringify({
+					receipt: { ...receipt, actorType },
+					snapshot: {
+						title: github.issues.get(14)?.title,
+						body: github.issues.get(14)?.body,
+					},
+				}),
+			);
+			const store = fileAdmissionStore(state);
+			const key = { repo, issue: 14, eventId: "34537521383" };
+
+			assert.equal((await store.read(key)).kind, "unreadable");
+			assert.equal((await store.readSnapshot(key)).kind, "unreadable");
+		});
+	}
+
 	it("reads an admission record back by event", async () => {
 		const github = new FakeGitHub();
 		const state = stateDir();
