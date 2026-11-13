@@ -943,7 +943,7 @@ Production steps:
 - [ ] Complete the `pi-factorio` drain under #712 and the production switch/retirement under #734 with their own grants. Preserve unfinished-run evidence. Do not upgrade pi-factorio or assume a hold alone drains it.
 - [ ] Obtain the owner's explicit real-dispatch decision under #735 after the fresh install, bridge, drain, and switch are proven. Only the owner removes the local hold or changes factory:enabled. Program completion grants neither action.
 - [ ] Under a separate fixture/spend grant, run the first real fixture through actual provider stages, exact-head CI, and expected handoff. Keep full existing allowances, close the fixture, and preserve receipts. This proves production operation after closure, not a retrospective prerequisite for L15.
-- [ ] After archiving their receipts to the private trail, delete the two disposable VMs `layout-upgrade-test` and `layout-fresh-test` and the fixture repository `nublai/pi-herdr-factorio-layout-fixture` under a cleanup grant.
+- [x] After archiving their receipts to the private trail, delete the two disposable VMs `layout-upgrade-test` and `layout-fresh-test` and the fixture repository `nublai/pi-herdr-factorio-layout-fixture` under a cleanup grant. On 2026-11-13, under Giuseppe's cleanup grant, the receipts went to the private trail and both VMs were deleted. Giuseppe decided to keep the fixture repository for L13 lane 10 and the first real fixture run. Its two exe.dev integrations wait for his key.
 
 ## Appendix A. Prototype evidence
 
