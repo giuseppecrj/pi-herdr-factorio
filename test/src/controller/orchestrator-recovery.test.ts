@@ -8,8 +8,12 @@ import { fileRunFiles } from "../../../host/controller/run-files.ts";
 import { writeStatus } from "../../../host/controller/state.ts";
 import { Orchestrator } from "../../../src/controller/orchestrator.ts";
 import { digestOf } from "../../../src/core/run.ts";
+import { admitTicket } from "../../../src/trust/admission.ts";
+import type { JsonValue } from "../../../src/core/json.ts";
 import {
+	BOT_LOGIN,
 	FAKE_REPO,
+	type FakeIssue,
 	labelEvent,
 	networkError,
 	TRUSTED_RUN_CAP,
@@ -34,7 +38,32 @@ import {
 	capAt,
 	setWorkflow,
 	omitFromList,
+	EVENT_ID,
 } from "./orchestrator-fixtures.ts";
+
+const LABEL_AT = "2026-10-29T01:21:37Z";
+
+/** Rewrites issue 14's ready event and its admission record as older code stored a bot's label. */
+function botApplied(
+	ctx: ReturnType<typeof world>,
+	issue: FakeIssue,
+	login: string,
+): void {
+	const key = `14/${EVENT_ID + 14}`;
+	const receipt = ctx.store.records.get(key);
+
+	assert.ok(receipt);
+	ctx.store.records.set(key, { ...receipt, actor: login });
+	ctx.github.permissions.set(login, "write");
+	issue.timeline = [
+		labelEvent({
+			id: EVENT_ID + 14,
+			at: LABEL_AT,
+			actor: login,
+			actorType: "Bot",
+		}),
+	];
+}
 
 describe("Orchestrator terminal claim records", () => {
 	it("keeps a failed run's record until a read shows the marker, so a restart whose read hides it posts nothing", async () => {
@@ -1899,3 +1928,190 @@ describe("Orchestrator stall aborts", () => {
 		assert.equal(report.totals.stalls, 2);
 	});
 });
+
+describe("Orchestrator admissions recorded for a bot-applied ready event", () => {
+	for (const login of [BOT_LOGIN, "renovate"]) {
+		it(`refuses a recorded, unmarked admission of ${login} as bot_actor and launches nothing`, async () => {
+			const ctx = world();
+			const issue = ctx.github.add(labeled(14));
+
+			const admitted = await admitTicket({
+				platform: EXE_DEV_PLATFORM,
+				exec: ctx.github.exec,
+				env: () => "/home/exedev",
+				repo,
+				issue: 14,
+				allowlist: [repo],
+				store: ctx.store,
+			});
+
+			assert.equal(admitted.decision, "admitted");
+			botApplied(ctx, issue, login);
+			ctx.executor.fallback = { kind: "hang" };
+
+			const report = await ctx.start().tick();
+
+			assert.deepEqual(report.refused, [{ issue: 14, reasons: ["bot_actor"] }]);
+			assert.deepEqual(report.runs, []);
+			assert.equal(ctx.executor.launches.length, 0);
+			assert.deepEqual(statuses(ctx.github, 14), []);
+			assert.ok(!events(ctx.logs).includes("admission_recovered"));
+
+			ctx.clock.t += 30_000;
+			ctx.github.calls.length = 0;
+
+			const again = await ctx.start().tick();
+
+			assert.deepEqual(again.runs, []);
+			assert.equal(ctx.executor.launches.length, 0);
+			assert.equal(
+				ctx.github.calls.filter((call) =>
+					call.join(" ").includes("collaborators"),
+				).length,
+				0,
+			);
+		});
+	}
+
+	it("still recovers a recorded, unmarked admission a human applied", async () => {
+		const ctx = world();
+
+		ctx.github.add(labeled(14));
+		await admitTicket({
+			platform: EXE_DEV_PLATFORM,
+			exec: ctx.github.exec,
+			env: () => "/home/exedev",
+			repo,
+			issue: 14,
+			allowlist: [repo],
+			store: ctx.store,
+		});
+		ctx.executor.fallback = { kind: "hang" };
+
+		const report = await ctx.start().tick();
+
+		assert.deepEqual(runIssues(report), [14]);
+		assert.ok(events(ctx.logs).includes("admission_recovered"));
+		assert.equal(ctx.executor.launches.length, 1);
+	});
+
+	for (const login of [BOT_LOGIN, "renovate"]) {
+		it(`releases an adopted running run of ${login} as bot_actor and relaunches nothing`, async () => {
+			const ctx = world();
+			const issue = ctx.github.add(labeled(14));
+
+			ctx.executor.fallback = { kind: "hang" };
+			await ctx.start().tick();
+			assert.deepEqual(statuses(ctx.github, 14), ["1:claimed", "2:running"]);
+			assert.equal(ctx.executor.launches.length, 1);
+
+			botApplied(ctx, issue, login);
+			ctx.clock.t += 30_000;
+
+			const report = await ctx.start().tick();
+
+			assert.deepEqual(report.runs, []);
+			assert.equal(statuses(ctx.github, 14).at(-1), "3:released");
+			assert.equal(ctx.executor.launches.length, 1);
+			assert.deepEqual(
+				ctx.logs.flatMap((entry) =>
+					entry.event === "claim_released" ? [entry.fields.why] : [],
+				),
+				["bot_actor"],
+			);
+		});
+
+		it(`releases an unmarked claim of ${login} as bot_actor and launches nothing`, async () => {
+			const ctx = world();
+			const issue = ctx.github.add(labeled(14));
+
+			ctx.github.posts = ["lost"];
+			await ctx.start().tick();
+			assert.deepEqual(statuses(ctx.github, 14), []);
+
+			botApplied(ctx, issue, login);
+			ctx.executor.fallback = { kind: "hang" };
+			ctx.clock.t += 30_000;
+
+			const report = await ctx.start().tick();
+
+			assert.deepEqual(report.runs, []);
+			assert.deepEqual(statuses(ctx.github, 14), ["1:released"]);
+			assert.equal(ctx.executor.launches.length, 0);
+			assert.equal(ctx.files.claims.get(runOf(14))?.status, "released");
+		});
+	}
+
+	for (const actor of [null, { login: "ghost", type: "User" }]) {
+		const shown = actor === null ? "withheld" : "ghost";
+
+		it(`releases a marked blocked claim recorded for ${BOT_LOGIN} when the timeline actor reads ${shown}`, async () => {
+			const ctx = world();
+			const issue = ctx.github.add(labeled(14));
+
+			await ctx.start().tick();
+			assert.deepEqual(statuses(ctx.github, 14), ["1:claimed", "2:blocked"]);
+			const launched = ctx.executor.launches.length;
+
+			botApplied(ctx, issue, BOT_LOGIN);
+			issue.timeline = [readyEventBy(actor)];
+			ctx.executor.fallback = { kind: "hang" };
+			ctx.clock.t += 30_000;
+
+			const report = await ctx.start().tick();
+
+			assert.deepEqual(report.runs, []);
+			assert.equal(ctx.executor.launches.length, launched);
+			assert.deepEqual(statuses(ctx.github, 14), [
+				"1:claimed",
+				"2:blocked",
+				"3:released",
+			]);
+			assert.deepEqual(
+				ctx.logs.flatMap((entry) =>
+					entry.event === "claim_released" ? [entry.fields.why] : [],
+				),
+				["bot_actor"],
+			);
+
+			ctx.clock.t += 30_000;
+			await ctx.start().tick();
+			assert.equal(ctx.executor.launches.length, launched);
+			assert.equal(statuses(ctx.github, 14).length, 3);
+		});
+
+		it(`still resumes a marked blocked claim a human applied when the timeline actor reads ${shown}`, async () => {
+			const ctx = world();
+			const issue = ctx.github.add(labeled(14));
+
+			await ctx.start().tick();
+			assert.deepEqual(statuses(ctx.github, 14), ["1:claimed", "2:blocked"]);
+			const launched = ctx.executor.launches.length;
+
+			issue.timeline = [readyEventBy(actor)];
+			ctx.executor.fallback = { kind: "hang" };
+			ctx.clock.t += 30_000;
+
+			const report = await ctx.start().tick();
+
+			assert.deepEqual(runIssues(report), [14]);
+			assert.equal(ctx.executor.launches.length, launched + 1);
+			assert.ok(
+				!statuses(ctx.github, 14).some((status) =>
+					status.endsWith(":released"),
+				),
+			);
+		});
+	}
+});
+
+/** Issue 14's ready event as GitHub returns it with a withheld (`null`) or deleted actor. */
+function readyEventBy(actor: JsonValue): JsonValue {
+	return {
+		id: EVENT_ID + 14,
+		event: "labeled",
+		actor,
+		created_at: LABEL_AT,
+		label: { name: "factory:ready", color: "ededed" },
+	};
+}

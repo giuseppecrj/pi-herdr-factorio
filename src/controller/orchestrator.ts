@@ -68,6 +68,7 @@ import {
 	GitHubTicketWriter,
 	type IssueComment,
 	type IssueRecord,
+	isBotLogin,
 	type Read,
 	type TimelineEntry,
 } from "../github/adapter.ts";
@@ -1070,6 +1071,7 @@ export class Orchestrator {
 			readonly eventAt: string;
 			readonly seq: number;
 		},
+		recordedBot = false,
 	): ClaimObservation {
 		const latest = latestReadyEntry(timeline);
 
@@ -1080,8 +1082,11 @@ export class Orchestrator {
 			return this.#unverifiedBy("timeline_entry", null);
 		const { entry } = latest;
 
-		if (entry.kind === "labeled" && entry.id === event.eventId)
-			return this.#confirmedBy(event);
+		if (entry.kind === "labeled" && entry.id === event.eventId) {
+			return recordedBot || (entry.actor.kind === "login" && entry.actor.bot)
+				? { kind: "released", reason: "bot_actor" }
+				: this.#confirmedBy(event);
+		}
 
 		if (entry.at <= event.eventAt)
 			return this.#unverifiedBy("timeline_entry", null);
@@ -2202,9 +2207,19 @@ export class Orchestrator {
 				this.#unverifiedBy("timeline", timeline.failure),
 			);
 
+		const stored = await this.#input.store.read({
+			repo: this.#input.repo,
+			issue: marker.issue,
+			eventId: marker.eventId,
+		});
+
 		return this.#observeClaim(
 			marker,
-			this.#timelineObservation(timeline.value, marker),
+			this.#timelineObservation(
+				timeline.value,
+				marker,
+				stored.kind === "found" && isBotLogin(stored.receipt.actor),
+			),
 		);
 	}
 
@@ -2651,7 +2666,9 @@ export class Orchestrator {
 			marker.status === "running" &&
 			!(
 				eligibility.kind === "released" &&
-				(eligibility.reason === "closed" || eligibility.reason === "new_event")
+				(eligibility.reason === "closed" ||
+					eligibility.reason === "new_event" ||
+					eligibility.reason === "bot_actor")
 			) &&
 			(await this.#recoverOutput(run, output));
 
@@ -2841,6 +2858,7 @@ export class Orchestrator {
 		| { readonly kind: "found"; readonly receipt: AdmittedReceipt }
 		| { readonly kind: "none" }
 		| { readonly kind: "ended" }
+		| { readonly kind: "refused"; readonly reason: "bot_actor" }
 		| { readonly kind: "defer" }
 	> {
 		const repo = this.#input.repo;
@@ -2892,6 +2910,13 @@ export class Orchestrator {
 			);
 
 			return { kind: "defer" };
+		}
+
+		if (
+			(latest.entry.actor.kind === "login" && latest.entry.actor.bot) ||
+			isBotLogin(stored.receipt.actor)
+		) {
+			return { kind: "refused", reason: "bot_actor" };
 		}
 
 		this.#input.log("admission_recovered", {
@@ -2995,6 +3020,19 @@ export class Orchestrator {
 		if (local.kind === "defer") return null;
 
 		if (local.kind === "ended") {
+			this.#see(issue, record.updatedAt, { kind: "decided" });
+
+			return null;
+		}
+
+		if (local.kind === "refused") {
+			input.refused.push({ issue, reasons: [local.reason] });
+			this.#input.log("admission_refused", {
+				issue,
+				reasons: local.reason,
+				detail: "recorded_admission",
+				retry: false,
+			});
 			this.#see(issue, record.updatedAt, { kind: "decided" });
 
 			return null;

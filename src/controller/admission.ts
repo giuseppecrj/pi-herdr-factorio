@@ -102,6 +102,7 @@ export function refusalSettlesUntilEdited(reason: RefusalReason): boolean {
 		case "pull_request":
 		case "issue_closed":
 		case "actor_withheld":
+		case "bot_actor":
 		case "unauthorized":
 		case "answers_record_invalid":
 		case "link_record_invalid":

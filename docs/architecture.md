@@ -108,7 +108,7 @@ interface TicketAdapter {
   normalize(event: JsonValue): FactoryEvent | null; // parsed gh output
   fetchCandidates(): Promise<Ticket[]>;
   fetchStates(refs: TicketRef[]): Promise<Map<string, TicketState>>;
-  canAdmit(ref: TicketRef, actor: string): Promise<boolean>;
+  canAdmit(ref: TicketRef, actor: { login: string; bot: boolean }): Promise<boolean>; // false for a bot, before any permission read
   report(ref: TicketRef, run: Run): Promise<void>;
   ask(ref: TicketRef, questions: string[]): Promise<void>;
   close(ref: TicketRef, run: Run): Promise<void>;

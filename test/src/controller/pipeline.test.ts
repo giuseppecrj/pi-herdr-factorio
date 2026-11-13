@@ -41,6 +41,7 @@ function fixture() {
 async function admitFromLabel(
 	adapter: FakeTicketAdapter,
 	actor: string,
+	bot = false,
 ): Promise<Run | "refused" | "ignored"> {
 	const event = adapter.normalize(
 		adapter.rawEvent({
@@ -49,11 +50,16 @@ async function admitFromLabel(
 			at: "2026-10-29T01:21:37Z",
 			ref: ticket,
 			actor,
+			bot,
 		}),
 	);
 
 	if (event === null || event.kind !== "ready") return "ignored";
-	const canAdmit = await adapter.canAdmit(event.ref, event.actor);
+
+	const canAdmit = await adapter.canAdmit(event.ref, {
+		login: event.actor,
+		bot: event.bot,
+	});
 
 	const decision = decideAdmission({
 		label: "factory:ready",
@@ -124,6 +130,16 @@ describe("controller driven through the fake adapter", () => {
 	it("refuses the ready label from an account without write access", async () => {
 		const adapter = fixture();
 		assert.equal(await admitFromLabel(adapter, "stranger"), "refused");
+		assert.deepEqual(adapter.calls, []);
+	});
+
+	it("refuses the ready label from a bot with write access", async () => {
+		const adapter = fixture();
+		adapter.setPermission("app[bot]", "write");
+		adapter.setPermission("renovate", "write");
+		assert.equal(await admitFromLabel(adapter, "app[bot]"), "refused");
+		assert.equal(await admitFromLabel(adapter, "renovate", true), "refused");
+		assert.notEqual(await admitFromLabel(adapter, "renovate"), "refused");
 		assert.deepEqual(adapter.calls, []);
 	});
 

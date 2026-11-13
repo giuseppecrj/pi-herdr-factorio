@@ -1583,6 +1583,21 @@ export const REFUSALS: readonly Refusal[] = [
 		},
 	},
 	{
+		expect: "bot_actor",
+		settles: true,
+		degrade({ github }, issue) {
+			github.permissions.set(EXE_DEV_PLATFORM.controllerLogin, "write");
+			issue.timeline = [
+				labelEvent({
+					id: EVENT_ID + 14,
+					at: LABEL_AT,
+					actor: EXE_DEV_PLATFORM.controllerLogin,
+					actorType: "Bot",
+				}),
+			];
+		},
+	},
+	{
 		expect: "unauthorized",
 		settles: true,
 		degrade(_, issue) {

@@ -537,13 +537,42 @@ describe("GitHubTicketAdapter timeline paging", () => {
 					kind: "labeled",
 					id: "7",
 					at: "2026-10-29T01:21:37Z",
-					actor: { kind: "login", login: "giuseppecrj" },
+					actor: { kind: "login", login: "giuseppecrj", bot: false },
 					label: READY_LABEL,
 				},
 				{ kind: "other" },
 				{ kind: "renamed", at: "2026-10-29T01:21:50Z" },
 			],
 		});
+	});
+
+	it("marks a label actor as a bot by account type or by [bot] login", async () => {
+		const github = new FakeGitHub();
+		const at = "2026-10-29T01:21:37Z";
+
+		github.add(
+			fakeIssue(14, {
+				timeline: [
+					labelEvent({ id: 1, at, actor: "renovate", actorType: "Bot" }),
+					labelEvent({ id: 2, at, actor: "some-app[bot]" }),
+					labelEvent({ id: 3, at, actor: "writer" }),
+				],
+			}),
+		);
+
+		const read = await adapterFor(github).readTimeline(14);
+
+		assert.equal(read.kind, "ok");
+		assert.deepEqual(
+			read.value.map((entry) =>
+				entry.kind === "labeled" ? entry.actor : null,
+			),
+			[
+				{ kind: "login", login: "renovate", bot: true },
+				{ kind: "login", login: "some-app[bot]", bot: true },
+				{ kind: "login", login: "writer", bot: false },
+			],
+		);
 	});
 
 	it("rejects a label event without an ID or a valid time", async () => {
@@ -950,6 +979,7 @@ describe("GitHubTicketAdapter as a TicketReader", () => {
 			at: "2026-10-29T01:21:37Z",
 			ref: adapter.ref(14),
 			actor: "giuseppecrj",
+			bot: false,
 		});
 
 		assert.equal(adapter.normalize(raw("giuseppecrj", "bug")), null);
@@ -957,6 +987,48 @@ describe("GitHubTicketAdapter as a TicketReader", () => {
 		assert.equal(adapter.normalize({ ...raw("writer"), issue: null }), null);
 		assert.equal(adapter.normalize(null), null);
 		assert.equal(adapter.normalize([raw("writer")]), null);
+	});
+
+	it("carries a bot label actor through normalize and refuses it before any permission read", async () => {
+		const github = new FakeGitHub();
+		const adapter = adapterFor(github);
+
+		const raw = (login: string, type: "User" | "Bot") => ({
+			id: 7,
+			event: "labeled",
+			actor: { login, type },
+			created_at: "2026-10-29T01:21:37Z",
+			label: { name: READY_LABEL },
+			issue: { number: 14 },
+		});
+
+		for (const [login, type, bot] of [
+			["some-app[bot]", "Bot", true],
+			["some-app[bot]", "User", true],
+			["renovate", "Bot", true],
+			["writer", "User", false],
+		] as const) {
+			github.permissions.set(login, "write");
+			const event = adapter.normalize(raw(login, type));
+
+			assert.equal(event?.kind, "ready", login);
+
+			if (event?.kind !== "ready") continue;
+			assert.equal(event.actor, login);
+			assert.equal(event.bot, bot, `${login} ${type}`);
+
+			const before = github.calls.length;
+
+			assert.equal(
+				await adapter.canAdmit(event.ref, {
+					login: event.actor,
+					bot: event.bot,
+				}),
+				!bot,
+				`${login} ${type}`,
+			);
+			assert.equal(github.calls.length - before, bot ? 0 : 1, login);
+		}
 	});
 
 	it("lists open ready issues without pull requests, paging by number", async () => {
@@ -1010,13 +1082,25 @@ describe("GitHubTicketAdapter as a TicketReader", () => {
 		const adapter = adapterFor(github);
 		const ref = adapter.ref(14);
 
-		assert.equal(await adapter.canAdmit(ref, "writer"), true);
-		assert.equal(await adapter.canAdmit(ref, "triager"), false);
 		assert.equal(
-			await adapter.canAdmit(ref, "exe-dev-github-integration[bot]"),
+			await adapter.canAdmit(ref, { login: "writer", bot: false }),
+			true,
+		);
+		assert.equal(
+			await adapter.canAdmit(ref, { login: "triager", bot: false }),
 			false,
 		);
-		assert.equal(await adapter.canAdmit(ref, "nobody-known"), false);
+		assert.equal(
+			await adapter.canAdmit(ref, {
+				login: "exe-dev-github-integration[bot]",
+				bot: false,
+			}),
+			false,
+		);
+		assert.equal(
+			await adapter.canAdmit(ref, { login: "nobody-known", bot: false }),
+			false,
+		);
 
 		const before = github.calls.length;
 
@@ -1030,7 +1114,10 @@ describe("GitHubTicketAdapter as a TicketReader", () => {
 			"$(id)",
 		]) {
 			assert.equal(isLogin(hostile), false, hostile);
-			assert.equal(await adapter.canAdmit(ref, hostile), false);
+			assert.equal(
+				await adapter.canAdmit(ref, { login: hostile, bot: false }),
+				false,
+			);
 		}
 
 		assert.equal(github.calls.length, before);

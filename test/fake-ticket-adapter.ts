@@ -3,8 +3,10 @@ import { fileURLToPath } from "node:url";
 import type { JsonValue } from "../src/core/json.ts";
 import type { Run, TicketRef } from "../src/core/run.ts";
 import type { Exec, ExecResult } from "../src/github/exec.ts";
+import { isBotLogin } from "../src/github/adapter.ts";
 import {
 	type FactoryEvent,
+	type ReadyActor,
 	type Ticket,
 	type TicketAdapter,
 	ticketKey,
@@ -89,8 +91,12 @@ export class FakeTicketAdapter implements TicketAdapter {
 		return states;
 	}
 
-	async canAdmit(_ref: TicketRef, actor: string): Promise<boolean> {
-		return hasWriteAccess(this.permissionOf(actor));
+	async canAdmit(_ref: TicketRef, actor: ReadyActor): Promise<boolean> {
+		return (
+			!actor.bot &&
+			!isBotLogin(actor.login) &&
+			hasWriteAccess(this.permissionOf(actor.login))
+		);
 	}
 
 	async report(ref: TicketRef, run: Run): Promise<void> {
@@ -211,13 +217,14 @@ export function labelEvent(input: {
 	id: number;
 	at: string;
 	actor: string;
+	actorType?: "User" | "Bot";
 	label?: string;
 	event?: "labeled" | "unlabeled";
 }): JsonValue {
 	return {
 		id: input.id,
 		event: input.event ?? "labeled",
-		actor: { login: input.actor, type: "User" },
+		actor: { login: input.actor, type: input.actorType ?? "User" },
 		created_at: input.at,
 		label: { name: input.label ?? READY_LABEL, color: "ededed" },
 	};

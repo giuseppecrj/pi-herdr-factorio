@@ -14,7 +14,15 @@ export type Ticket = {
  * poller can drop an event it has already seen.
  */
 export type FactoryEvent =
-	| { kind: "ready"; id: string; at: string; ref: TicketRef; actor: string }
+	| {
+			kind: "ready";
+			id: string;
+			at: string;
+			ref: TicketRef;
+			actor: string;
+			/** GitHub typed the label's actor `Bot`, or its login ends in `[bot]`. */
+			bot: boolean;
+	  }
 	| { kind: "answered"; id: string; at: string; ref: TicketRef; actor: string }
 	| {
 			kind: "cancelled";
@@ -38,6 +46,9 @@ export function ticketKey(ref: TicketRef): string {
 	return `${ref.provider}:${ref.key}`;
 }
 
+/** The account that applied a ready label. */
+export type ReadyActor = { readonly login: string; readonly bot: boolean };
+
 export interface TicketReader {
 	normalize(event: JsonValue): FactoryEvent | null;
 	fetch(ref: TicketRef): Promise<Ticket>;
@@ -45,7 +56,8 @@ export interface TicketReader {
 	fetchCandidates(): Promise<Ticket[]>;
 	/** Keyed by `ticketKey`. */
 	fetchStates(refs: readonly TicketRef[]): Promise<Map<string, TicketState>>;
-	canAdmit(ref: TicketRef, actor: string): Promise<boolean>;
+	/** Refuses every bot before any permission read. */
+	canAdmit(ref: TicketRef, actor: ReadyActor): Promise<boolean>;
 }
 
 /**

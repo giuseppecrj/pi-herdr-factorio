@@ -21,6 +21,7 @@ import {
 	type CommentPost,
 	type FactoryEvent,
 	type LabelWrite,
+	type ReadyActor,
 	type Ticket,
 	type TicketReader,
 	type TicketState,
@@ -29,9 +30,12 @@ import {
 
 export type Login = string & { readonly __brand: "Login" };
 
-/** A label actor or author: a login that passed GitHub's grammar, or not. */
+/**
+ * A label actor or author: a login that passed GitHub's grammar, or not.
+ * `bot` is true when GitHub typed the account `Bot` or its login ends in `[bot]`.
+ */
 export type Actor =
-	| { readonly kind: "login"; readonly login: Login }
+	| { readonly kind: "login"; readonly login: Login; readonly bot: boolean }
 	| { readonly kind: "withheld" };
 
 export type GitHubFailure =
@@ -258,11 +262,25 @@ function idOf(value: JsonValue | undefined): string | null {
 	return id === null || id === 0 ? null : String(id);
 }
 
+/** A submitted review. `bot` is true when GitHub typed its author `Bot` or the login ends in `[bot]`. */
+export type PullReview = Extract<FeedbackEvent, { kind: "review" }> & {
+	readonly bot: boolean;
+};
+
+/** True for a login GitHub gives an app's bot account, which ends in `[bot]`. */
+export function isBotLogin(login: string): boolean {
+	return login.endsWith("[bot]");
+}
+
 function actorOf(value: JsonValue | undefined): Actor {
 	const login = stringOf(pathOf(value, ["login"]));
 
 	return login !== null && isLogin(login)
-		? { kind: "login", login }
+		? {
+				kind: "login",
+				login,
+				bot: isBotLogin(login) || stringOf(pathOf(value, ["type"])) === "Bot",
+			}
 		: { kind: "withheld" };
 }
 
@@ -750,13 +768,11 @@ export class GitHubTicketAdapter implements TicketReader {
 		return { kind: "ok", value: records };
 	}
 
-	async readPullReviews(
-		pr: number,
-	): Promise<Read<Extract<FeedbackEvent, { kind: "review" }>[]>> {
+	async readPullReviews(pr: number): Promise<Read<PullReview[]>> {
 		const read = await this.#pages(`pulls/${pr}/reviews`);
 
 		if (read.kind === "failed") return read;
-		const reviews: Extract<FeedbackEvent, { kind: "review" }>[] = [];
+		const reviews: PullReview[] = [];
 
 		for (const item of read.value) {
 			const v = objectOf(item);
@@ -793,6 +809,7 @@ export class GitHubTicketAdapter implements TicketReader {
 				commit,
 				body,
 				comments: [],
+				bot: isBotLogin(actor) || stringOf(pathOf(v?.user, ["type"])) === "Bot",
 			});
 		}
 
@@ -1070,6 +1087,7 @@ export class GitHubTicketAdapter implements TicketReader {
 			at: entry.at,
 			ref: this.ref(issue),
 			actor: entry.actor.login,
+			bot: entry.actor.bot,
 		};
 	}
 
@@ -1128,11 +1146,12 @@ export class GitHubTicketAdapter implements TicketReader {
 		return states;
 	}
 
-	/** False when the login fails GitHub's grammar or the lookup fails. */
-	async canAdmit(_ref: TicketRef, actor: string): Promise<boolean> {
-		if (!isLogin(actor)) return false;
+	/** False for a bot, a login outside GitHub's grammar or a failed lookup. A bot's permission is never read. */
+	async canAdmit(_ref: TicketRef, actor: ReadyActor): Promise<boolean> {
+		if (actor.bot || isBotLogin(actor.login) || !isLogin(actor.login))
+			return false;
 
-		const read = await this.readPermission(actor);
+		const read = await this.readPermission(actor.login);
 
 		return read.kind === "ok" && hasWriteAccess(read.value);
 	}

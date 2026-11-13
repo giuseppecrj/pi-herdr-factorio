@@ -39,7 +39,7 @@ Before the first PR, complete failing CI or blocking review can use the shared r
 
 ## Submit review feedback
 
-On an open factory PR, the controller reads conversation comments, submitted reviews and each review's inline comments. It classifies each item once. Only a submitted **Request changes** review from an actor with repository write access, reviewing the promoted head, is actionable. Conversation comments, approvals, questions and dismissed reviews do not request repair. The factory ignores its own messages. A failed permission read defers intake rather than treating the author as unauthorized.
+On an open factory PR, the controller reads conversation comments, submitted reviews and each review's inline comments. It classifies each item once. Only a submitted **Request changes** review from an actor with repository write access, reviewing the promoted head, is actionable. A review or comment by a bot, an account GitHub types `Bot` or a login ending in `[bot]`, is refused as unauthorized without a permission read, whatever access the bot has. Conversation comments, approvals, questions and dismissed reviews do not request repair. The factory ignores its own messages. A failed permission read defers intake rather than treating the author as unauthorized.
 
 Intake waits until the PR head, branch ref and promoted certified head agree. A review on a successor being promoted is not consumed as stale. A genuinely old-head review is refused. Inline comments under `test/acceptance/` are refused; their text and diff hunks never enter feedback cards or the private full-text file. The review body is the owner's own text and is forwarded when actionable.
 
@@ -55,7 +55,7 @@ Private batches and, when truncated, their digest-bound full-text JSON live unde
 
 The book's seen set and batch status survive restarts. Cursor overflow also holds as `feedback_overflow`, without consuming unstored events. Both overflow holds wait for the current stage to settle, appear in attention with their original age, and post one keyed issue notice. They leave readiness and budgets unchanged. While held, intake reads only reviews for dismissals of stored batches; it does not classify new feedback again. The owner can still merge or close the PR. A notice whose POST failed is retried after checking for its bot-authored key. Pre-F10 books still load with an empty feedback cursor; do not roll an older controller back over new feedback history.
 
-After merge, a model-free sweep checks landed ledger PRs at most once an hour per PR. A non-empty write-access review submitted after the merge files one deduplicated `factory:proposed` issue, regardless of review state. Conversation comments never file proposals. Held-out inline text is not quoted. The proposal has no `factory:ready` label and cannot be admitted automatically. Feedback never revives a terminal run.
+After merge, a model-free sweep checks landed ledger PRs at most once an hour per PR. A non-empty write-access review submitted after the merge files one deduplicated `factory:proposed` issue, regardless of review state. A bot's review files nothing, and its permission is not read. Conversation comments never file proposals. Held-out inline text is not quoted. The proposal has no `factory:ready` label and cannot be admitted automatically. Feedback never revives a terminal run.
 
 ## Push an owner change
 
