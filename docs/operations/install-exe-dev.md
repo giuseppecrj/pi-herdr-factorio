@@ -61,7 +61,7 @@ bash "$F" --repo nublai/pi-herdr-factorio-layout-fixture --vm <disposable-name> 
 
 Use a clean new-layout VM for fresh installation and a separate old-layout VM for upgrade. Keep the hold. Do not attach the production repository integration to either VM. Fixture installation is not production deployment proof.
 
-Old pinned download URLs still select their original installer. An old bootstrap given a new-layout SHA creates or retains the hold, then fails when the verified checkout lacks its old installer path, before any service stop. Download the new pinned `host/install/install-exe-dev.sh` bootstrap to upgrade; do not add an old-path shim.
+Old pinned download URLs still select their original installer. An old bootstrap given a new-layout SHA creates or retains the hold, then fails when the verified checkout lacks its old installer path, before any service stop. Download the new pinned `host/install/install-exe-dev.sh` bootstrap to upgrade; do not add an old-path shim. The failed old bootstrap leaves its staging clone behind, because its final `exec` skips the exit cleanup. Remove it with `rm -rf ~/.pi-herdr-factorio.install.*` before the upgrade.
 
 ### Check only
 

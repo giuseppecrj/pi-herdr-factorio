@@ -912,17 +912,20 @@ L15 moved this plan to `docs/plans/later/` when it closed the program. Each row 
 | CI | #765 | `2934424d8f1f9a0da88274d78d68df118114e76d` | `check` job timeout raised from 10 to 15 minutes after hosted-runner cancellations (#764). |
 | L15 | #763 | Set when it lands. | Docs moved by authority and freshness, this plan closed. |
 
-### Qualification pending owner action
+### Qualification
 
-These lanes are pending, not passed. The agent host's exe.dev key cannot add GitHub integrations, so no agent can attach the private fixture repository to a disposable VM. Each item names what unblocks it.
+The disposable-VM lanes ran on 2026-11-13 after the owner attached GitHub integrations scoped to `nublai/pi-herdr-factorio-layout-fixture` to `layout-upgrade-test` and `layout-fresh-test`. The agent host's exe.dev key cannot add integrations, so this needed the owner. The evidence is in the private trail at `layout/vm-lanes/log.md`. The fixture revisions are `660a21cf60c65c3acb630fc0ef3548fe3def1be5` for the old layout (5bd77d5 plus the two-field derivation) and `6df7bea663eb8b0ce3af0ee045c785908163d21c` for final main `fb89e43` with the same two-field derivation.
 
-- [ ] L13 lane 7, the fresh new-layout install on a clean disposable VM. Unblocked when the owner attaches a GitHub integration scoped to `nublai/pi-herdr-factorio-layout-fixture` to that VM, or grants a key that can.
-- [ ] L13 lane 8, the old-layout install, old-bootstrap refusal, and new-bootstrap upgrade on a second disposable VM. Unblocked by the same fixture integration on the second VM.
-- [ ] L13 lane 10, the real `ci.yml` run on main with a same-layout fixture candidate. Unblocked when the owner triggers the workflow under a fixture grant, as the first owner checklist item says.
-- [ ] L15 lanes 6 and 8 and the L15 perf probe, the fresh held install and head-owned gates at the L15 head-derived fixture revision. Unblocked by the fixture integration on a disposable VM. L15 landed without them, so they now run at final main together with the next item.
-- [ ] L15's post-merge fresh held install at final main and the new-main gates on that VM. Unblocked by the fixture integration on a disposable VM. Record the result through `log.sh` as L15's closure step specifies.
+- [x] L13 lane 7, L15 lane 6 and L15's closure step. A fresh held install on `layout-fresh-test` at `6df7bea`, following the runbook's fixture section literally. `--check` changed nothing. The controller became ready with a clean sandbox preflight and dispatch off (`locally_disabled`, `repo_switch_off`). `factory.env` has no `GH_ENTERPRISE_TOKEN`.
+- [x] L13 lane 8, on `layout-upgrade-test`, passed in four parts.
+  - The old-layout held install at `660a21c` succeeded.
+  - The old bootstrap given `6df7bea` kept the hold and failed before stopping anything. PID, HEAD and state were unchanged.
+  - The new bootstrap upgraded to `6df7bea` and kept the hold and state. A same-SHA rerun reported already installed and did not restart. An unreachable SHA failed before the stop. A failure after the stop left the service stopped, disabled and held, and a rerun recovered it.
+  - Controller start to ready took a median of 764 ms on the upgrade VM and 803 ms on the fresh VM. Fresh installs took 40 to 42 s, an upgrade about 31 s, and a same-SHA rerun 7 s.
+- [x] L15 lane 8, partly. The head-owned trusted gate at final main `fb89e43` passed all 7 required results in the pinned image on the coordinator's host, using the local gate recipe with its one uid mapping. It did not run on the VM.
+- [ ] L13 lane 10, the real `ci.yml` run on main with a same-layout fixture candidate. This is still pending. It is owner-triggered, as the first owner checklist item says.
 
-**Recorded deviation.** L13 lane 10 was meant to block L14, and L15 was meant to qualify on a disposable VM before STACK-READY. The coordinator landed L14 and L15 first. Dispatch was paused, `nubl-factory` was empty, and nothing deploys from main, so no running factory depended on the unqualified tree. The owner's production steps below still wait for this qualification.
+**Recorded deviation.** L13 lane 10 was meant to block L14, and L15 was meant to qualify on a disposable VM before STACK-READY. The coordinator landed L14 and L15 first. Dispatch was paused, `nubl-factory` was empty, and nothing deployed from main. The VM lanes have since passed at final main. Only lane 10 remains.
 
 ### Post-program owner checklist, not a PR
 
@@ -931,7 +934,7 @@ Every item below is the owner's, and none is checked by the program. The first t
 Qualification of this program:
 
 - [ ] Trigger the real `ci.yml` on product main with a same-layout fixture candidate and a valid nonce, as L13 lane 10 specifies. Gates and the exact-SHA receipt must pass. The report job's human-actor refusal is expected.
-- [ ] Attach the fixture repository's GitHub integration to clean disposable VMs so the fresh install and the old-to-new upgrade run at final main, as L13 lanes 7 and 8 and L15's closure step specify.
+- [x] Attach the fixture repository's GitHub integration to clean disposable VMs so the fresh install and the old-to-new upgrade run at final main. Done by the owner on 2026-11-13, and the lanes passed.
 
 Production steps:
 
