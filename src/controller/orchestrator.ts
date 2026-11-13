@@ -67,7 +67,6 @@ import {
 	GitHubTicketWriter,
 	type IssueComment,
 	type IssueRecord,
-	isBotLogin,
 	type Read,
 	type TimelineEntry,
 } from "../github/adapter.ts";
@@ -87,6 +86,7 @@ import {
 	type SnapshotReader,
 	type TickReads,
 	admitTicket,
+	isBotAdmission,
 	latestReadyEntry,
 	readTickInputs,
 } from "../trust/admission.ts";
@@ -2223,7 +2223,7 @@ export class Orchestrator {
 			this.#timelineObservation(
 				timeline.value,
 				marker,
-				stored.kind === "found" && isBotLogin(stored.receipt.actor),
+				stored.kind === "found" && isBotAdmission(stored.receipt),
 			),
 		);
 	}
@@ -2287,11 +2287,15 @@ export class Orchestrator {
 
 				const observation = this.#observeClaim(
 					claim,
-					this.#timelineObservation(timeline.value, {
-						eventId: claim.eventId,
-						eventAt: admitted.eventAt,
-						seq: this.#seqFloor(claim.issue, ledger),
-					}),
+					this.#timelineObservation(
+						timeline.value,
+						{
+							eventId: claim.eventId,
+							eventAt: admitted.eventAt,
+							seq: this.#seqFloor(claim.issue, ledger),
+						},
+						admitted.botActor,
+					),
 				);
 
 				if (observation.kind === "owned_unverified") return "undecided";
@@ -2919,7 +2923,7 @@ export class Orchestrator {
 
 		if (
 			(latest.entry.actor.kind === "login" && latest.entry.actor.bot) ||
-			isBotLogin(stored.receipt.actor)
+			isBotAdmission(stored.receipt)
 		) {
 			return { kind: "refused", reason: "bot_actor" };
 		}

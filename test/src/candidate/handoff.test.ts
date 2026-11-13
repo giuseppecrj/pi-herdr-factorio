@@ -191,10 +191,31 @@ test("initial generation captures main before publication and retains pre-candid
 });
 
 test("the actual observer withdraws a candidate whose ready event a bot applied", async () => {
-	for (const [actor, eligibility] of [
+	for (const [actor, eligibility, actorType, timelineActor = actor] of [
 		[{ login: CONTROLLER_LOGIN, type: "Bot" }, "withdrawn"],
 		[{ login: "renovate", type: "Bot" }, "withdrawn"],
 		[{ login: "giuseppecrj", type: "User" }, "ready"],
+		[{ login: "automation", type: "Bot" }, "withdrawn", "Bot", null],
+		[
+			{ login: "automation", type: "Bot" },
+			"withdrawn",
+			"Bot",
+			{ login: "ghost", type: "User" },
+		],
+		[{ login: "writer", type: "User" }, "ready", "User", null],
+		[
+			{ login: "writer", type: "User" },
+			"ready",
+			"User",
+			{ login: "ghost", type: "User" },
+		],
+		[{ login: "writer", type: "User" }, "ready", undefined, null],
+		[
+			{ login: "writer", type: "User" },
+			"ready",
+			undefined,
+			{ login: "ghost", type: "User" },
+		],
 	] as const) {
 		const root = mkdtempSync(join(tmpdir(), "handoff-bot-ready-"));
 
@@ -209,6 +230,7 @@ test("the actual observer withdraws a candidate whose ready event a bot applied"
 					eventId: "700",
 					eventAt: "2026-10-30T00:00:00Z",
 					actor: actor.login,
+					actorType,
 					actorPermission: "write",
 					snapshotDigest: digestOf("snapshot"),
 					snapshotSource: "unedited",
@@ -249,7 +271,7 @@ test("the actual observer withdraws a candidate whose ready event a bot applied"
 								id: 700,
 								event: "labeled",
 								created_at: "2026-10-30T00:00:00Z",
-								actor,
+								actor: timelineActor,
 								label: { name: "factory:ready" },
 							},
 						]);

@@ -537,7 +537,12 @@ describe("GitHubTicketAdapter timeline paging", () => {
 					kind: "labeled",
 					id: "7",
 					at: "2026-10-29T01:21:37Z",
-					actor: { kind: "login", login: "giuseppecrj", bot: false },
+					actor: {
+						kind: "login",
+						login: "giuseppecrj",
+						type: "User",
+						bot: false,
+					},
 					label: READY_LABEL,
 				},
 				{ kind: "other" },
@@ -568,9 +573,9 @@ describe("GitHubTicketAdapter timeline paging", () => {
 				entry.kind === "labeled" ? entry.actor : null,
 			),
 			[
-				{ kind: "login", login: "renovate", bot: true },
-				{ kind: "login", login: "some-app[bot]", bot: true },
-				{ kind: "login", login: "writer", bot: false },
+				{ kind: "login", login: "renovate", type: "Bot", bot: true },
+				{ kind: "login", login: "some-app[bot]", type: "User", bot: true },
+				{ kind: "login", login: "writer", type: "User", bot: false },
 			],
 		);
 	});

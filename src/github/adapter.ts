@@ -35,7 +35,12 @@ export type Login = string & { readonly __brand: "Login" };
  * `bot` is true when GitHub typed the account `Bot` or its login ends in `[bot]`.
  */
 export type Actor =
-	| { readonly kind: "login"; readonly login: Login; readonly bot: boolean }
+	| {
+			readonly kind: "login";
+			readonly login: Login;
+			readonly type: string | null;
+			readonly bot: boolean;
+	  }
 	| { readonly kind: "withheld" };
 
 export type GitHubFailure =
@@ -274,12 +279,14 @@ export function isBotLogin(login: string): boolean {
 
 function actorOf(value: JsonValue | undefined): Actor {
 	const login = stringOf(pathOf(value, ["login"]));
+	const type = stringOf(pathOf(value, ["type"]));
 
 	return login !== null && isLogin(login)
 		? {
 				kind: "login",
 				login,
-				bot: isBotLogin(login) || stringOf(pathOf(value, ["type"])) === "Bot",
+				type,
+				bot: isBotLogin(login) || type === "Bot",
 			}
 		: { kind: "withheld" };
 }

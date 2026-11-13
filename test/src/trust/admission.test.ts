@@ -124,6 +124,7 @@ describe("admitTicket", () => {
 			eventId: "34537521383",
 			eventAt: LABEL_AT,
 			actor: "giuseppecrj",
+			actorType: "User",
 			actorPermission: "admin",
 			snapshotDigest: unedited("Fixture 14", "Body of fixture 14."),
 			snapshotSource: "unedited",
@@ -1626,6 +1627,127 @@ describe("F04c admission carry-overs", () => {
 		});
 
 		assert.deepEqual(proof, { kind: "ambiguous", detail: "version_withheld" });
+	});
+
+	it("stores the label actor's account type on a new admission", async () => {
+		const github = new FakeGitHub();
+		const state = stateDir();
+
+		github.add(labeledBy("giuseppecrj"));
+		const receipt = await admit(github, state);
+
+		assert.equal(receipt.decision, "admitted");
+		assert.ok("actorType" in receipt);
+		assert.equal(receipt.actorType, "User");
+
+		const stored = await fileAdmissionStore(state).read({
+			repo,
+			issue: 14,
+			eventId: "34537521383",
+		});
+
+		assert.deepEqual(stored, { kind: "found", receipt });
+	});
+
+	for (const actorType of ["Bot", "User", undefined]) {
+		it(`reads a stored admission with actor type ${actorType ?? "unknown"}`, async () => {
+			const github = new FakeGitHub();
+			const state = stateDir();
+
+			github.add(labeledBy("giuseppecrj"));
+			const receipt = await admit(github, state);
+
+			assert.equal(receipt.decision, "admitted");
+
+			if (receipt.decision !== "admitted") throw new Error("fixture");
+			const stored = { ...receipt, actor: "automation", actorType };
+
+			if (actorType === undefined) delete stored.actorType;
+			writeFileSync(
+				join(
+					state,
+					"admissions/github/nublai/pi-herdr-factorio/14/34537521383.json",
+				),
+				JSON.stringify({
+					receipt: stored,
+					snapshot: {
+						title: github.issues.get(14)?.title,
+						body: github.issues.get(14)?.body,
+					},
+				}),
+			);
+			const store = fileAdmissionStore(state);
+			const key = { repo, issue: 14, eventId: "34537521383" };
+
+			assert.deepEqual(await store.read(key), {
+				kind: "found",
+				receipt: stored,
+			});
+			const snapshot = await store.readSnapshot(key);
+
+			assert.equal(snapshot.kind, "found");
+
+			if (snapshot.kind === "found") assert.deepEqual(snapshot.receipt, stored);
+		});
+	}
+
+	for (const actorType of [1, {}, ""]) {
+		it(`treats stored actor type ${JSON.stringify(actorType)} as unreadable`, async () => {
+			const github = new FakeGitHub();
+			const state = stateDir();
+
+			github.add(labeledBy("giuseppecrj"));
+			const receipt = await admit(github, state);
+
+			assert.equal(receipt.decision, "admitted");
+			writeFileSync(
+				join(
+					state,
+					"admissions/github/nublai/pi-herdr-factorio/14/34537521383.json",
+				),
+				JSON.stringify({
+					receipt: { ...receipt, actorType },
+					snapshot: {
+						title: github.issues.get(14)?.title,
+						body: github.issues.get(14)?.body,
+					},
+				}),
+			);
+			const store = fileAdmissionStore(state);
+			const key = { repo, issue: 14, eventId: "34537521383" };
+
+			assert.equal((await store.read(key)).kind, "unreadable");
+			assert.equal((await store.readSnapshot(key)).kind, "unreadable");
+		});
+	}
+
+	it("stores a missing actor type as null and reads it back as unknown", async () => {
+		const github = new FakeGitHub();
+		const state = stateDir();
+
+		github.add(labeledBy("giuseppecrj"));
+		const receipt = await admit(github, state);
+
+		assert.equal(receipt.decision, "admitted");
+
+		const path = join(
+			state,
+			"admissions/github/nublai/pi-herdr-factorio/14/34537521383.json",
+		);
+
+		const stored = JSON.parse(readFileSync(path, "utf8"));
+		stored.receipt.actorType = null;
+
+		writeFileSync(path, JSON.stringify(stored));
+
+		const read = await fileAdmissionStore(state).read({
+			repo,
+			issue: 14,
+			eventId: "34537521383",
+		});
+
+		assert.equal(read.kind, "found");
+		assert.equal(read.kind === "found" && read.receipt.actorType, null);
 	});
 
 	it("reads an admission record back by event", async () => {
