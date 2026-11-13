@@ -6,7 +6,10 @@ import {
 } from "node:http";
 import { brotliCompressSync, deflateRawSync, gzipSync } from "node:zlib";
 import type { JsonObject } from "../../src/core/json.ts";
-import { GATEWAY_USER_AGENT } from "./credentials.ts";
+import {
+	CREDENTIALED_RESPONSE_MAX_BYTES,
+	GATEWAY_USER_AGENT,
+} from "./credentials.ts";
 
 /** What the fixture saw: names and the injected credential, never a body. */
 export type Received = {
@@ -102,6 +105,50 @@ function anthropicStream(mode: AnthropicReplay): string {
 	].join("");
 }
 
+/** Clean UTF-8 text of exactly `size` bytes, with non-ASCII characters and emoji. */
+export function cleanBody(size: number): Buffer {
+	const line = Buffer.from('{"t":"caf\u00e9 \u{1f600} \u65e5\u672c"}\n');
+	const body = Buffer.alloc(size, " ");
+
+	for (let at = 0; at + line.length <= size; at += line.length) {
+		line.copy(body, at);
+	}
+
+	return body;
+}
+
+/**
+ * The base64 of `leak <secret>` with a run of `!` between every character.
+ * The longest form of a secret is its percent encoding, three bytes per
+ * secret byte, so each run is longer than the `6 × len(longest form) − 1`
+ * bytes a streaming hold window would keep.
+ */
+export function gappedBase64(secret: string): Buffer {
+	const gap = "!".repeat(Buffer.byteLength(secret) * 18 + 8);
+
+	return Buffer.from(
+		[...Buffer.from(`leak ${secret}`).toString("base64")].join(gap),
+	);
+}
+
+/** Writes `body` in `size`-byte chunks, one per turn of the event loop. */
+function trickle(res: ServerResponse, body: Buffer, size: number): void {
+	const next = (at: number) => {
+		if (res.destroyed) return;
+
+		if (at >= body.length) {
+			res.end();
+
+			return;
+		}
+
+		res.write(body.subarray(at, at + size));
+		setImmediate(() => next(at + size));
+	};
+
+	next(0);
+}
+
 function headerOf(req: IncomingMessage, name: string): string | null {
 	const values: string[] = [];
 
@@ -124,10 +171,46 @@ function respond(
 	res: ServerResponse,
 	path: string,
 	anthropic: AnthropicReplay,
+	held: (() => void)[],
 ) {
 	const secret = secretOf(req);
 
 	switch (path) {
+		case "/api/reflect-base64-gaps-1":
+		case "/api/reflect-base64-gaps-64":
+		case "/api/reflect-base64-gaps-whole": {
+			const body = gappedBase64(secret);
+			const chunking = path.slice("/api/reflect-base64-gaps-".length);
+
+			res.writeHead(200, { "Content-Type": "text/plain" });
+			trickle(res, body, chunking === "whole" ? body.length : Number(chunking));
+
+			return;
+		}
+
+		case "/api/cap-clean":
+			res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+			trickle(res, cleanBody(CREDENTIALED_RESPONSE_MAX_BYTES), 64 * 1024);
+
+			return;
+		case "/api/over-cap-clean":
+			res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+			trickle(res, cleanBody(CREDENTIALED_RESPONSE_MAX_BYTES + 1), 64 * 1024);
+
+			return;
+		case "/api/held":
+			res.writeHead(200, { "Content-Type": "text/plain" });
+			res.write(cleanBody(4096));
+			held.push(() => res.end("released\n"));
+
+			return;
+		case "/api/release":
+			for (const release of held.splice(0)) release();
+
+			res.writeHead(200, { "Content-Type": "text/plain" });
+			res.end("ok");
+
+			return;
 		case "/anthropic/v1/models":
 			res.writeHead(200, { "Content-Type": "application/json" });
 			res.end('{"data":[],"has_more":false}');
@@ -360,6 +443,7 @@ export async function startEchoFixture(
 	const received: Received[] = [];
 	const foreign: EchoFixture["foreign"] = [];
 	const waiters: { path: string; count: number; done: () => void }[] = [];
+	const held: (() => void)[] = [];
 
 	const arrivals = (path: string) =>
 		received.filter((seen) => seen.path === path).length;
@@ -414,7 +498,7 @@ export async function startEchoFixture(
 		}
 
 		req.resume();
-		req.on("end", () => respond(req, res, path, anthropic));
+		req.on("end", () => respond(req, res, path, anthropic, held));
 	});
 
 	await new Promise<void>((done) => server.listen(port, "127.0.0.1", done));

@@ -42,13 +42,17 @@ import {
 } from "../../../host/gateway/control.ts";
 import {
 	bindCredentials,
+	CREDENTIALED_RESPONSE_MAX_BYTES,
 	GATEWAY_USER_AGENT,
 	type CredentialBinding,
 	parseCeilings,
+	secretForms,
 } from "../../../host/gateway/credentials.ts";
 import {
 	ANTHROPIC_REPLAYS,
+	cleanBody,
 	type EchoFixture,
+	gappedBase64,
 } from "../../../host/gateway/echo-fixture.ts";
 import { familyFromJournal } from "../../../src/core/models.ts";
 import {
@@ -154,6 +158,65 @@ function call(
 		);
 		req.end(body ?? undefined);
 	});
+}
+
+type Streamed = {
+	received: () => number;
+	firstByte: Promise<void>;
+	done: Promise<{ status: number; code: string | null; body: Buffer }>;
+};
+
+/** A GET that reports when its first body byte reaches the client. */
+function streamed(socketPath: string, path: string): Streamed {
+	const chunks: Buffer[] = [];
+	let first = () => {};
+
+	const firstByte = new Promise<void>((done) => {
+		first = done;
+	});
+
+	const done = new Promise<{
+		status: number;
+		code: string | null;
+		body: Buffer;
+	}>((settle) => {
+		const req = request(
+			{
+				socketPath,
+				method: "GET",
+				path,
+				headers: { Host: HOST },
+				setHost: false,
+			},
+			(res) => {
+				const finish = () =>
+					settle({
+						status: res.statusCode ?? 0,
+						code: String(res.headers["x-proxy-error"] ?? "") || null,
+						body: Buffer.concat(chunks),
+					});
+
+				res.on("data", (chunk: Buffer) => {
+					chunks.push(chunk);
+					first();
+				});
+				res.on("end", finish);
+				res.on("error", finish);
+				res.on("close", finish);
+			},
+		);
+
+		req.on("error", () =>
+			settle({ status: 0, code: null, body: Buffer.concat(chunks) }),
+		);
+		req.end();
+	});
+
+	return {
+		received: () => chunks.reduce((sum, chunk) => sum + chunk.length, 0),
+		firstByte,
+		done,
+	};
 }
 
 function raw(socketPath: string, text: string): Promise<string> {
@@ -1060,6 +1123,110 @@ describe("gateway credential engine against the echo fixture", () => {
 			assert.equal(h.audit.at(-1)?.decision, "deny", path);
 			assert.equal(h.audit.at(-1)?.reason, "response-blocked", path);
 		}
+	});
+
+	it("delivers no byte of base64 split by gaps longer than the hold, at 1-byte, 64-byte and whole-body chunking", async () => {
+		const longest = Math.max(
+			...secretForms(Buffer.from(ECHO_SECRET), {
+				kind: "header",
+				name: "Authorization",
+				scheme: "Bearer",
+			}).map((form) => form.length),
+		);
+
+		assert.equal(
+			gappedBase64(ECHO_SECRET).includes("!".repeat(longest * 6)),
+			true,
+		);
+
+		const refusal = Buffer.from(denyBody("response-blocked"));
+
+		for (const chunking of ["1", "64", "whole"]) {
+			const path = `/echo/api/reflect-base64-gaps-${chunking}`;
+			const arrivals = fixture.arrivals(path.slice("/echo".length));
+			const reply = await streamed(h.socketPath, path).done;
+
+			assert.equal(fixture.arrivals(path.slice("/echo".length)), arrivals + 1);
+			assert.equal(reply.status, 403, path);
+			assert.equal(reply.code, "response-blocked", path);
+			assert.equal(reply.body.length, refusal.length, path);
+			assert.equal(reply.body.equals(refusal), true, path);
+			assert.equal(h.audit.at(-1)?.decision, "deny", path);
+			assert.equal(h.audit.at(-1)?.reason, "response-blocked", path);
+			assert.equal(h.audit.at(-1)?.status, 403, path);
+		}
+	});
+
+	it("refuses a credentialed body over the cap with no byte delivered, and delivers one at the cap byte for byte", async () => {
+		const refusal = Buffer.from(denyBody("response-blocked"));
+		const over = await streamed(h.socketPath, "/echo/api/over-cap-clean").done;
+
+		assert.equal(over.status, 403);
+		assert.equal(over.code, "response-blocked");
+		assert.equal(over.body.length, refusal.length);
+		assert.equal(over.body.equals(refusal), true);
+		assert.equal(h.audit.at(-1)?.decision, "deny");
+		assert.equal(h.audit.at(-1)?.reason, "response-blocked");
+
+		const expected = cleanBody(CREDENTIALED_RESPONSE_MAX_BYTES);
+		const at = await streamed(h.socketPath, "/echo/api/cap-clean").done;
+
+		assert.equal(at.status, 200);
+		assert.equal(at.code, null);
+		assert.equal(at.body.length, expected.length);
+		assert.equal(at.body.equals(expected), true);
+		assert.equal(h.audit.at(-1)?.decision, "forward");
+
+		const plain = await streamed(h.socketPath, "/plain/api/over-cap-clean")
+			.done;
+
+		const overExpected = cleanBody(CREDENTIALED_RESPONSE_MAX_BYTES + 1);
+
+		assert.equal(plain.status, 200);
+		assert.equal(plain.body.length, overExpected.length);
+		assert.equal(plain.body.equals(overExpected), true);
+	});
+
+	it("holds a clean credentialed body until the upstream ends, while an uncredentialed one streams", async () => {
+		const late = (ms: number) =>
+			new Promise<"late">((done) => setTimeout(() => done("late"), ms).unref());
+
+		const whole = Buffer.concat([cleanBody(4096), Buffer.from("released\n")]);
+		const plain = streamed(h.socketPath, "/plain/api/held");
+
+		try {
+			assert.equal(
+				await Promise.race([plain.firstByte, late(5000)]),
+				undefined,
+			);
+			assert.equal(plain.received() > 0, true);
+		} finally {
+			await call(h.socketPath, "GET", "/plain/api/release");
+		}
+
+		const open = await plain.done;
+
+		assert.equal(open.status, 200);
+		assert.equal(open.body.equals(whole), true);
+
+		const arrivals = fixture.arrivals("/api/held");
+		const credentialed = streamed(h.socketPath, "/echo/api/held");
+
+		try {
+			await fixture.waitFor("/api/held", arrivals + 1);
+			assert.equal(
+				await Promise.race([credentialed.firstByte, late(300)]),
+				"late",
+			);
+			assert.equal(credentialed.received(), 0);
+		} finally {
+			await call(h.socketPath, "GET", "/plain/api/release");
+		}
+
+		const closed = await credentialed.done;
+
+		assert.equal(closed.status, 200);
+		assert.equal(closed.body.equals(whole), true);
 	});
 
 	it("answers a clean 403 for compressed bytes under a text type, before any header is sent", async () => {

@@ -687,6 +687,13 @@ export class SecretScanner {
 	}
 }
 
+/**
+ * The largest credentialed response body the gateway will hold. The whole
+ * body stays in memory until it is scanned, so this bounds that memory per
+ * request.
+ */
+export const CREDENTIALED_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
+
 export type FilterStep =
 	| { readonly kind: "pass"; readonly bytes: Buffer }
 	| { readonly kind: "blocked" };

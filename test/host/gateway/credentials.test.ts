@@ -25,6 +25,7 @@ import {
 	bindCredentials,
 	buildUpstreamHeaders,
 	type Ceilings,
+	CREDENTIALED_RESPONSE_MAX_BYTES,
 	isCredentialHeader,
 	loadCeilings,
 	loadSecrets,
@@ -865,13 +866,58 @@ describe("reflection scanning", () => {
 			const body = Buffer.from([...base64].join(gap.repeat(hold + 8)));
 
 			for (const size of [1, 64, body.length]) {
+				const result = filtered(body, size);
+
 				assert.equal(
-					filtered(body, size).blocked,
+					result.blocked,
 					true,
 					`${JSON.stringify(gap)} gaps in ${size}-byte chunks`,
 				);
+				assert.equal(
+					result.out.length,
+					0,
+					`${JSON.stringify(gap)} gaps in ${size}-byte chunks: no byte passes`,
+				);
 			}
 		}
+	});
+
+	it("passes no byte of a clean body until it ends, then all of it", () => {
+		const body = Buffer.from(`{"items":"${"clean text ".repeat(400)}"}`);
+		const filter = new ReflectionFilter(forms);
+		let passed = 0;
+
+		for (let at = 0; at < body.length; at += 64) {
+			const step = filter.push(body.subarray(at, at + 64));
+
+			assert.equal(step.kind, "pass", `@${at}`);
+			passed += step.kind === "pass" ? step.bytes.length : 0;
+		}
+
+		assert.equal(passed, 0);
+
+		const rest = filter.end();
+
+		assert.equal(rest.kind, "pass");
+		assert.equal(rest.kind === "pass" && rest.bytes.equals(body), true);
+	});
+
+	it("blocks a body over the cap with no byte passed, and passes one at the cap byte for byte", () => {
+		const over = Buffer.alloc(CREDENTIALED_RESPONSE_MAX_BYTES + 1, "a");
+
+		for (const size of [64 * 1024, over.length]) {
+			const result = filtered(over, size);
+
+			assert.equal(result.blocked, true, `${size}-byte chunks`);
+			assert.equal(result.out.length, 0, `${size}-byte chunks`);
+		}
+
+		const at = over.subarray(0, CREDENTIALED_RESPONSE_MAX_BYTES);
+		const clean = filtered(at, 64 * 1024);
+
+		assert.equal(clean.blocked, false);
+		assert.equal(clean.out.length, at.length);
+		assert.equal(clean.out.equals(at), true);
 	});
 
 	it("refuses a C1 control character, whole or split across chunks", () => {
@@ -906,6 +952,6 @@ describe("reflection scanning", () => {
 		const result = filtered(large, 1024);
 
 		assert.equal(result.blocked, false);
-		assert.deepEqual(result.out, large);
+		assert.equal(result.out.equals(large), true);
 	});
 });
