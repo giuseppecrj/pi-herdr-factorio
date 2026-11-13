@@ -589,7 +589,7 @@ test("visible suite excludes heavy integration tests without losing CI or gate c
 	const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 	assert.equal(
 		pkg.scripts.test,
-		`node --experimental-strip-types --test --test-concurrency=1 ${manifest.testGlobs
+		`node --experimental-strip-types --test --test-concurrency=2 ${manifest.testGlobs
 			.slice(0, 2)
 			.map((pattern: string) => JSON.stringify(pattern))
 			.join(" ")}`,

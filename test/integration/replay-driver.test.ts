@@ -107,6 +107,54 @@ async function restored() {
 	);
 }
 
+it("requires an explicit current verification target before SSH", async () => {
+	const fake = await mkdtemp(join(tmpdir(), "target-ssh-"));
+	await writeFile(
+		join(fake, "ssh"),
+		"#!/usr/bin/env bash\nprintf 'ssh-stub %s\\n' \"$*\"\nwhile IFS= read -r _line; do :; done\n",
+		{ mode: 0o755 },
+	);
+
+	try {
+		for (const target of [undefined, "", "pi-factorio", "nubl-factory"]) {
+			const result = spawnSync(
+				"bash",
+				[
+					"-c",
+					`ssh() { printf 'ssh-stub %s\\n' "$*"; while IFS= read -r _line; do :; done; }
+export -f ssh
+exec bash "$1" "$2"`,
+					"target-test",
+					".pi/skills/verify-factory/scripts/vm.sh",
+					".pi/skills/verify-factory/scripts/doctor.sh",
+				],
+				{
+					encoding: "utf8",
+					env: {
+						...process.env,
+						FACTORY_VM: target,
+						PATH: `${fake}:${process.env.PATH}`,
+						SSH_AUTH_SOCK: join(fake, "missing.sock"),
+						SSH_AUTH_SOCK_OVERRIDE: join(fake, "missing.sock"),
+					},
+				},
+			);
+
+			assert.equal(
+				result.status,
+				target === "nubl-factory" ? 0 : 2,
+				result.stderr,
+			);
+
+			if (target === "nubl-factory")
+				assert.match(result.stdout, /ssh-stub exedev@nubl-factory\.exe\.xyz/);
+			else assert.doesNotMatch(result.stdout, /ssh-stub/);
+		}
+	} finally {
+		await rm(fake, { recursive: true, force: true });
+	}
+});
+
 it("waits for two visible-test deadlines plus 60 seconds after signaling stop", async () => {
 	const source = await readFile(script, "utf8");
 	const stop = source.match(/stop_child\(\) \{[\s\S]*?\n\}/)?.[0];

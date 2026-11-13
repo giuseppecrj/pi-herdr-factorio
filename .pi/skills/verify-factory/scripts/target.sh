@@ -1,7 +1,7 @@
 # Sourced locally by vm.sh and lane-setup.sh. Selects the verification VM
-# named by FACTORY_VM (default pi-factorio when unset) from ../targets.env and
+# named explicitly by FACTORY_VM from ../targets.env and
 # sets target_ssh and target_gh_host, or exits 2 before any ssh connection.
-FACTORY_VM="${FACTORY_VM-pi-factorio}"
+FACTORY_VM="${FACTORY_VM-}"
 target_refuse() {
   printf '%s (see targets.env)\n' "$1" >&2
   exit 2

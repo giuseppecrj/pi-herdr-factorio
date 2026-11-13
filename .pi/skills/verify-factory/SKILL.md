@@ -5,7 +5,7 @@ description: Verify pi-herdr-factorio on its real surfaces. Use for authorized V
 
 # Verify pi-herdr-factorio
 
-Use this skill for authorized factory checks, not permission to run them. Read [the active layout program](../../../docs/plans/later/codebase-layout.md) before any drive. Dispatch stays paused throughout that program. `pi-factorio` is retiring under #712 and #734. `nubl-factory` stays empty until the owner installs it after the program.
+Use this skill for authorized factory checks, not permission to run them. Read [the active layout program](../../../docs/plans/later/codebase-layout.md) before any drive. The layout program is complete. `pi-factorio` was retired and deleted on 2026-11-13 (#734 closed), with its state archived. `nubl-factory` is the held production controller. Dispatch stays paused pending the owner's #735 decision.
 
 The factory is a Pi package plus a controller. Drive these interfaces only under the task's grants:
 
@@ -22,12 +22,12 @@ Read `.pi/skills/verify-factory/features/README.md` for the feature map and the 
 
 ## Target
 
-`vm.sh` and `lane-setup.sh` source `target.sh`, which reads `FACTORY_VM` and `targets.env`. `FACTORY_VM` still defaults to `pi-factorio`, so never omit it. `factorio` remains unconfigured.
+`vm.sh` and `lane-setup.sh` source `target.sh`, which reads `FACTORY_VM` and `targets.env`. `FACTORY_VM` must name an explicit target. An unset value refuses before SSH. `factorio` remains unconfigured.
 
 | Target | Role | Reach from the agent host | Allowed |
 | --- | --- | --- | --- |
 | `nubl-factory` | Production since 2026-11-13 (#734), held | Yes. Giuseppe tagged it `tester`, so the `Headless-Agent-Key` reaches it. | Routine read-only checks: hold file, `factory.service` state and restarts, the journal, `status --json`, `owner-feed --json`. Bridge install, upgrades, the hold-lift (#735) and fixture runs each need Giuseppe's go. Never delete, copy over or retag it. |
-| `pi-factorio` | Retired production, stopped, disabled and held, state archived | No | Nothing from this host. Deleting it waits on Giuseppe. |
+| `pi-factorio` | Retired and deleted on 2026-11-13 (#734 closed), state archived | No | No target record or helper access. |
 
 A read-only check on production:
 
@@ -40,12 +40,13 @@ Do not run lane helpers that write (`lane-setup.sh`, `drive-*.sh`) against `nubl
 
 ## Launch
 
-The legacy helper commands below describe authorized lanes outside the layout program's host restrictions. Do not run them on the retiring host. For layout checks, follow the plan's isolated local state, exact-head native CI, and separately granted disposable fixture procedure.
+The legacy helper commands below describe authorized lanes outside the layout program's host restrictions. The retired host no longer exists. For layout checks, follow the plan's isolated local state, exact-head native CI, and separately granted disposable fixture procedure.
 
 For short CLI drives, give each lane its own workspace and state directory, then install its committed dependencies. Record every started controller or viewer PID and stop it when the drive ends. Never drive a process this run did not start.
 
 ```bash
 S=.pi/skills/verify-factory/scripts
+export FACTORY_VM=<authorized-target>
 $S/lane-setup.sh <pr-id> <worker-n>
 ```
 
@@ -65,7 +66,7 @@ The doctor reads versions and repository metadata. Run it before an authorized d
 $S/vm.sh $S/doctor.sh
 ```
 
-Running `$S/doctor.sh` directly does the same thing, because it sends itself through `vm.sh`. It connects with `SSH_AUTH_SOCK=$HOME/.ssh/headless-agent.sock ssh <target ssh destination>`, prints `target=<name>` first, sets `PATH` to include `$HOME/.local/bin` and `$HOME/.local/share/mise/shims`, and prints the node, Pi, Herdr and `gh` versions and the OS image. It then proves a repository-scoped read with `gh repo view nublai/pi-herdr-factorio` under the target's `GH_HOST`. Expected today on `pi-factorio`: node 26.x (at least 26.12.1), pi 1.4.0, herdr 0.9.5, and `doctor=ok` on the last line.
+Running `$S/doctor.sh` directly does the same thing, because it sends itself through `vm.sh`. It connects with `SSH_AUTH_SOCK=$HOME/.ssh/headless-agent.sock ssh <target ssh destination>`, prints `target=<name>` first, sets `PATH` to include `$HOME/.local/bin` and `$HOME/.local/share/mise/shims`, and prints the node, Pi, Herdr and `gh` versions and the OS image. It then proves a repository-scoped read with `gh repo view nublai/pi-herdr-factorio` under the target's `GH_HOST`. Expected on `nubl-factory`: node 26.x (at least 26.12.1), pi 1.4.0, herdr 0.9.5, and `doctor=ok` on the last line.
 
 Do not call `gh api user`. The integration is repository-scoped and that call fails. The doctor prints no credentials.
 
@@ -162,7 +163,7 @@ Under the cleanup grant, clean residue after failed attempts too. Verify evidenc
 
 | Script | Where it runs | Invocation |
 | --- | --- | --- |
-| `vm.sh` | local | `[FACTORY_VM=<target>] vm.sh <script> [args]` |
+| `vm.sh` | local | `FACTORY_VM=<target> vm.sh <script> [args]` |
 | `target.sh` | local, sourced by `vm.sh` and `lane-setup.sh` | not run directly |
 | `doctor.sh` | VM | `vm.sh doctor.sh`, or `doctor.sh`, which calls `vm.sh` |
 | `lane-setup.sh` | local, calls `remote-setup.sh` | `lane-setup.sh <pr-id> <n>` |

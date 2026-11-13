@@ -585,10 +585,85 @@ describe("exe.dev installer pure and isolated helpers (never a real install)", (
 		for (const body of [
 			`printf '%s' '{}' | jq -e 'true'`,
 			`printf '%s' 'invalid' | jq -e '.full_name == $repo'`,
+			`printf '%s' '{}' | jq --unknown-flag '.full_name == $repo'`,
 		]) {
 			const result = shell(body);
 			assert.notEqual(result.status, 0);
 			assert.equal(result.stdout, "");
+		}
+	});
+
+	it("matches real jq on installer protocol samples when available", (t) => {
+		if (spawnSync("jq", ["--version"]).status !== 0) {
+			t.diagnostic("jq is unavailable; fixture parity was not checked");
+
+			return;
+		}
+
+		const filters = [
+			...readFileSync(script, "utf8").matchAll(/jq[^\n]*?'([^']+)'/g),
+		].map((match) => match[1]);
+
+		const tick = {
+			at: "2099-01-01",
+			dispatch: { enabled: false, reasons: ["locally_disabled"] },
+		};
+
+		const valid = {
+			full_name: "owner/repo",
+			data: [{}],
+			platform: { repositories: ["owner/repo"] },
+			controller: { state: "running", lastTick: tick },
+			...tick,
+		};
+
+		for (const filter of new Set(filters)) {
+			assert.ok(filter);
+
+			for (const input of [
+				"",
+				JSON.stringify(valid),
+				"{}",
+				"null",
+				"42",
+				'"text"',
+				"[]",
+				`${JSON.stringify(valid)}\n{}`,
+				JSON.stringify({
+					...valid,
+					dispatch: {
+						enabled: false,
+						reasons: "prefix_locally_disabled_suffix",
+					},
+					platform: { repositories: "prefix_owner/repo_suffix" },
+				}),
+			]) {
+				const args: string[] = [
+					"-e",
+					"--arg",
+					"repo",
+					"owner/repo",
+					"--arg",
+					"after",
+					"2026-01-01",
+					filter,
+				];
+
+				const real = spawnSync("jq", args, { input, encoding: "utf8" });
+
+				const fixture = spawnSync(
+					process.execPath,
+					[join(root, "test/fixtures/install-exe-dev/jq.mjs"), ...args],
+					{ input, encoding: "utf8" },
+				);
+
+				assert.equal(
+					fixture.status,
+					real.status,
+					`${filter}: ${input}\n${fixture.stderr}`,
+				);
+				assert.equal(fixture.stdout, real.stdout, `${filter}: ${input}`);
+			}
 		}
 	});
 
@@ -728,10 +803,11 @@ describe("exe.dev installer pure and isolated helpers (never a real install)", (
 		try {
 			for (const [state, reasons, enabled, expected] of [
 				["running", ["locally_disabled", "sandbox_preflight"], false, 0],
+				["running", "prefix_locally_disabled_suffix", false, 1],
 				["running", [], false, 1],
 				["stopped", ["locally_disabled"], false, 1],
 				["running", ["locally_disabled"], true, 1],
-			] satisfies [string, string[], boolean, number][]) {
+			] satisfies [string, string[] | string, boolean, number][]) {
 				writeFileSync(
 					join(dir, "status"),
 					JSON.stringify({

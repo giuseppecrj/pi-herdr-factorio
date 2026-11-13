@@ -3732,6 +3732,8 @@
 			"reader": "test/integration/replay-driver.test.ts",
 			"tokens": {
 				"const script = \".pi/skills/verify-factory/scripts/drive-replay.sh\"": 1,
+				"\".pi/skills/verify-factory/scripts/vm.sh\"": 1,
+				"\".pi/skills/verify-factory/scripts/doctor.sh\"": 1,
 				"readFile(\"host/sandbox/visible-tests.ts\"": 1,
 				"\"src\", \"host\", \"skills\", \"package.json\", \"README.md\", \"docs/decisions.tsv\", \".github/factory\", \"test/fixtures/replay\", script, \".pi/skills/verify-factory/scripts/drive-replay.ts\", \".pi/skills/verify-factory/scripts/lane-id.sh\",": 1,
 				"join(control, \"test/fixtures/replay/corpus.json\")": 2,
@@ -3744,6 +3746,14 @@
 			"targets": [
 				{
 					"path": ".pi/skills/verify-factory/scripts/drive-replay.sh",
+					"type": "file"
+				},
+				{
+					"path": ".pi/skills/verify-factory/scripts/vm.sh",
+					"type": "file"
+				},
+				{
+					"path": ".pi/skills/verify-factory/scripts/doctor.sh",
 					"type": "file"
 				},
 				{
@@ -4231,7 +4241,7 @@
 				"\"../../../.pi/skills/verify-factory/scripts/drive-replay.sh\"": 1,
 				"\"../../../.pi/skills/verify-factory/scripts/drive-replay.ts\"": 1,
 				"new URL(\"../../fixtures/layout-host/old-provision.sh\", import.meta.url)": 1,
-				"new URL(\"../../../host/install/provision.sh\", import.meta.url)": 1
+				"new URL( \"../../fixtures/layout-host/relocated-provision.sh\", import.meta.url, )": 1
 			},
 			"targets": [
 				{
@@ -4291,11 +4301,11 @@
 					}
 				},
 				{
-					"path": "host/install/provision.sh",
+					"path": "test/fixtures/layout-host/relocated-provision.sh",
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../../../host/install/provision.sh"
+						"path": "../../fixtures/layout-host/relocated-provision.sh"
 					}
 				}
 			]

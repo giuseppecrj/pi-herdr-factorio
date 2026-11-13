@@ -43,6 +43,8 @@ function temp(prefix: string): string {
 	return dir;
 }
 
+const compileCache = temp("layout-compile-cache-");
+
 function treeFiles(): string[] {
 	if (existsSync(join(repo, ".git")))
 		return execFileSync(
@@ -94,7 +96,10 @@ function run(script: string, root: string, extra: readonly string[] = []) {
 	const result = spawnSync(
 		process.execPath,
 		["--experimental-strip-types", script, "--root", root, "--json", ...extra],
-		{ encoding: "utf8" },
+		{
+			encoding: "utf8",
+			env: { ...process.env, NODE_COMPILE_CACHE: compileCache },
+		},
 	);
 
 	const problems = textsOf(parseJson(result.stdout));
@@ -513,9 +518,10 @@ describe("layout guard", () => {
 
 	describe("readers", () => {
 		it("fails when any inventoried reader snippet is changed", () => {
+			const root = scratch();
+
 			for (const entry of readersOf(pristine)) {
 				if (entry.kind !== "paths") continue;
-				const root = scratch();
 
 				for (const [token] of entry.tokens)
 					edit(root, entry.reader, loose(token), "MUTATED");
@@ -529,11 +535,15 @@ describe("layout guard", () => {
 						),
 						`${entry.id} ${token}:\n${problems.join("\n")}`,
 					);
-				release(root);
+				cpSync(join(pristine, entry.reader), join(root, entry.reader));
 			}
+
+			assert.deepEqual(layout(root, "readers"), []);
 		});
 
 		it("fails when any inventoried reader target is moved", () => {
+			const root = scratch();
+
 			for (const entry of readersOf(pristine)) {
 				if (entry.kind !== "paths") continue;
 
@@ -544,11 +554,13 @@ describe("layout guard", () => {
 				);
 
 				if (moved.length === 0) continue;
-				const root = scratch();
+				const renamed: string[] = [];
 
 				for (const target of new Set(moved.map((t) => t.path)))
-					if (existsSync(join(root, target)))
+					if (existsSync(join(root, target))) {
 						renameSync(join(root, target), join(root, `${target}.moved`));
+						renamed.push(target);
+					}
 
 				const problems = layout(root, "readers");
 
@@ -559,8 +571,12 @@ describe("layout guard", () => {
 							`^readers: ${entry.id}: ${target.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} is missing, expected ${target.type}$`,
 						),
 					);
-				release(root);
+
+				for (const target of renamed.reverse())
+					renameSync(join(root, `${target}.moved`), join(root, target));
 			}
+
+			assert.deepEqual(layout(root, "readers"), []);
 		});
 
 		it("fails a reader whose relative root depth changes when it moves", () => {

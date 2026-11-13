@@ -45,8 +45,12 @@ if [ "$mode" = all ]; then
   if ! command -v mise >/dev/null; then
     curl -fsSL https://mise.run | sh
   fi
-  mise use -g node@26 >/dev/null
+  mise use -g "node@$NODE_VERSION" >/dev/null
   mise reshim
+  if [ "$(node --version)" != "v$NODE_VERSION" ]; then
+    echo "provision: node $(node --version) does not match required $NODE_VERSION" >&2
+    exit 1
+  fi
   grep -q 'mise activate' ~/.bashrc || echo 'eval "$(~/.local/bin/mise activate bash)"' >>~/.bashrc
 
   if [ "$(pi --version 2>/dev/null)" != "$PI_VERSION" ]; then

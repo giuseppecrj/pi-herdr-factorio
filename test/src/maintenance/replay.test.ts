@@ -1717,6 +1717,13 @@ describe("L05 installed bundle pins", () => {
 		return { root, assets };
 	}
 
+	it("pins the live provisioning recipe to the reviewed exact-Node recipe", async () => {
+		assert.equal(
+			digestOf(await readFile("host/install/provision.sh", "utf8")),
+			"d4fd4c26c704c5e413b803f11b5c99213a1d106b757fbc5418032c710e1a82a0",
+		);
+	});
+
 	it("L13 accepts only the reviewed relocation recipe pair and rejects same-layout changes and stale stage-init", async () => {
 		const { root, assets: initial } = await bundleRoot();
 		const repository = join(root, "repository");
@@ -1768,7 +1775,10 @@ describe("L05 installed bundle pins", () => {
 			);
 
 			const newRecipe = await readFile(
-				new URL("../../../host/install/provision.sh", import.meta.url),
+				new URL(
+					"../../fixtures/layout-host/relocated-provision.sh",
+					import.meta.url,
+				),
 				"utf8",
 			);
 
@@ -1827,6 +1837,43 @@ describe("L05 installed bundle pins", () => {
 				await refusal(root, assets, execute, {
 					previousSha: candidateSha,
 					candidateSha: newChanged,
+				}),
+				"replay_bundle_recipe_mismatch",
+			);
+			const pinnedRecipe = await readFile("host/install/provision.sh", "utf8");
+			await put("host/install/provision.sh", pinnedRecipe);
+			const pinnedSha = commit();
+			assert.equal(
+				await refusal(root, assets, execute, {
+					previousSha: candidateSha,
+					candidateSha: pinnedSha,
+				}),
+				"accepted",
+			);
+
+			for (const [previous, candidate] of [
+				[newChanged, pinnedSha],
+				[pinnedSha, candidateSha],
+				[previousSha, pinnedSha],
+			]) {
+				assert.equal(
+					await refusal(root, assets, execute, {
+						previousSha: previous,
+						candidateSha: candidate,
+					}),
+					"replay_bundle_recipe_mismatch",
+				);
+			}
+
+			await put(
+				"host/install/provision.sh",
+				`${pinnedRecipe}\nprintf changed\n`,
+			);
+			const pinnedChanged = commit();
+			assert.equal(
+				await refusal(root, assets, execute, {
+					previousSha: candidateSha,
+					candidateSha: pinnedChanged,
 				}),
 				"replay_bundle_recipe_mismatch",
 			);

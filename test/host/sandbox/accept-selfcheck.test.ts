@@ -20,6 +20,12 @@ test("pinned Pi 1.4.0 accepts a second prompt after settlement (scripted local t
 	const requests: string[] = [];
 
 	const server = createServer((req, res) => {
+		if (req.method !== "POST" || req.url !== "/v1/chat/completions") {
+			res.writeHead(404).end();
+
+			return;
+		}
+
 		const chunks: Buffer[] = [];
 		req.on("data", (chunk) => chunks.push(chunk));
 		req.on("end", () => {
@@ -35,6 +41,7 @@ test("pinned Pi 1.4.0 accepts a second prompt after settlement (scripted local t
 	t.after(() => new Promise<void>((done) => server.close(() => done())));
 	const address = server.address();
 	assert.ok(address !== null && address instanceof Object);
+	assert.equal((await fetch(`http://127.0.0.1:${address.port}/`)).status, 404);
 	writeFileSync(
 		join(dir, "models.json"),
 		JSON.stringify({
@@ -132,6 +139,7 @@ test("pinned Pi 1.4.0 accepts a second prompt after settlement (scripted local t
 				(r) => r.type === "response" && r.id === id && r.success === true,
 			),
 		);
+
 	assert.equal(requests.length, 2);
 	assert.ok(requests[1]?.includes("first prompt"));
 	assert.ok(requests[1]?.includes("reply-1"));

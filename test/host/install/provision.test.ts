@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import {
 	chmodSync,
 	mkdtempSync,
@@ -198,6 +198,78 @@ describe("platform environment for provisioning", () => {
 });
 
 describe("provisioning shell fragments (isolated, never the full script)", () => {
+	it("installs the exact bundle Node pin and refuses a different host version", () => {
+		const version = script.match(/^NODE_VERSION=(.+)$/m)?.[1];
+		const checksum = script.match(/^NODE_SHA256=(.+)$/m)?.[1];
+		assert.ok(version);
+		assert.equal(version, "26.12.1");
+		assert.equal(
+			checksum,
+			"6170b2d474e1c626f43cff3adc118df9fe3b573258a4fc3d850c8dbc6b079bbd",
+		);
+		const first = script.indexOf("  mise use -g ");
+		const last = script.indexOf("  grep -q 'mise activate'", first);
+		assert.ok(first >= 0 && last > first);
+
+		for (const actual of ["v26.12.1", "v26.13.0", "v26.12.0"]) {
+			const run: SpawnSyncReturns<string> = spawnSync(
+				"bash",
+				[
+					"-c",
+					`set -eu
+NODE_VERSION=$1
+actual=$2
+node() { printf '%s\\n' "$actual"; }
+mise() { printf '%s\\n' "$*" >&2; }
+${script.slice(first, last)}`,
+					"node-pin-fragment",
+					version,
+					actual,
+				],
+				{ encoding: "utf8" },
+			);
+
+			assert.equal(run.status, actual === `v${version}` ? 0 : 1, run.stderr);
+			assert.equal(run.stdout, "");
+			assert.ok(run.stderr.startsWith(`use -g node@${version}\nreshim\n`));
+
+			if (run.status !== 0) assert.match(run.stderr, /does not match required/);
+		}
+
+		const comparison = script.slice(
+			script.indexOf("version_at_least() {"),
+			script.indexOf("\n# fetch"),
+		);
+
+		const floor = script.slice(
+			script.indexOf("if ! version_at_least"),
+			script.indexOf(
+				'\nif [ "$mode" = all ]; then',
+				script.indexOf("if ! version_at_least"),
+			),
+		);
+
+		for (const actual of ["v26.12.1", "v26.13.0", "v26.12.0"]) {
+			const run = spawnSync(
+				"bash",
+				[
+					"-c",
+					`set -eu
+NODE_MIN=26.12.1
+actual=$1
+node() { printf '%s\\n' "$actual"; }
+${comparison}
+${floor}`,
+					"node-floor-fragment",
+					actual,
+				],
+				{ encoding: "utf8" },
+			);
+
+			assert.equal(run.status, actual === "v26.12.0" ? 1 : 0, run.stderr);
+		}
+	});
+
 	it("installs missing checkout dependencies once before the full-mode env command", () => {
 		const lines = script.split("\n");
 		const first = lines.indexOf('  if [ ! -d "$repo/node_modules" ]; then');
