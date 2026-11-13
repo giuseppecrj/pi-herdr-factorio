@@ -1547,7 +1547,7 @@ test("baseline timeout is incomplete; candidate deadlines have measured headroom
 	assert.equal(incomplete.reason, "baseline_deadline");
 });
 
-test("main's baseline test run gets 180 seconds and candidates three times its measured time", async (t) => {
+test("main's baseline test run gets 360 seconds and candidates three times its measured time", async (t) => {
 	const f = repo(t);
 	const deadlines: { tree: string; tests: boolean; deadlineMs?: number }[] = [];
 
@@ -1566,7 +1566,7 @@ test("main's baseline test run gets 180 seconds and candidates three times its m
 
 	const result = await checkCandidate({ ...gateInput(f, f.gateSha), runner });
 	const baseline = deadlines.find((d) => d.tree === "baseline" && d.tests);
-	assert.equal(baseline?.deadlineMs, 180000);
+	assert.equal(baseline?.deadlineMs, 360000);
 
 	const measured =
 		result.checks.find((c) => c.name === "baseline_tests")?.durationMs ?? -1;
@@ -1656,7 +1656,7 @@ test("trusted test concurrency is step-specific and preserves baseline/main coun
 		],
 	);
 	const measured = result.checks[0]?.durationMs ?? -1;
-	assert.equal(result.checks[0]?.deadlineMs, 180000);
+	assert.equal(result.checks[0]?.deadlineMs, 360000);
 
 	for (const check of result.checks.slice(1))
 		assert.equal(check.deadlineMs, Math.max(90000, 3 * measured + 30000));
