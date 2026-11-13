@@ -7,6 +7,7 @@ import {
 	readFile,
 	rm,
 	utimes,
+	symlink,
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -37,6 +38,7 @@ import { AUTONOMY_DIGEST } from "../../../src/ledger/schema.ts";
 import { candidateLifecycleFixture, withUmask } from "../../helpers.ts";
 import {
 	addRun,
+	addAnsweredRun,
 	emptyState,
 	ownerState,
 	now,
@@ -266,6 +268,145 @@ test("active published refresh stays blocked in the feed but neutral Working on 
 		);
 		assert.equal(feed.counts.blocked, 2);
 		assert.equal(feed.workingRunCount, 1);
+	});
+});
+
+test("feed keeps one newest admission per issue, including unverified discoveries", async () => {
+	await state(async (root) => {
+		const old = await addRun(root, 30, "running");
+		const latest = await addRun(root, 30, "running", { eventId: "2" });
+
+		for (const [runId, eventId] of [
+			[old, "1"],
+			[latest, "2"],
+		] as const) {
+			await save(root, ["status.json"], {
+				repo,
+				unverifiedClaims: [
+					{
+						runId,
+						issue: 30,
+						eventId,
+						since: now,
+						why: "issue",
+						failure: null,
+					},
+				],
+			});
+			const feed = await readOwnerFeed({ stateDir: root, repo, now });
+			const entries = feed.entries.filter((entry) => entry.issue === 30);
+			assert.equal(entries.length, 1);
+			assert.equal(entries[0]?.runId, latest);
+			assert.equal(entries[0]?.eventId, "2");
+			assert.equal(entries[0]?.kind, runId === latest ? "blocked" : null);
+		}
+	});
+});
+
+test("a stale unverified predecessor cannot revive an expired terminal issue", async () => {
+	await state(async (root) => {
+		const old = await addRun(root, 30, "running");
+		await addRun(root, 30, "landed", {
+			eventId: "2",
+			stage: "land",
+			enteredAt: now - 8 * 86_400_000,
+		});
+		await save(root, ["status.json"], {
+			repo,
+			unverifiedClaims: [
+				{
+					runId: old,
+					issue: 30,
+					eventId: "1",
+					since: now,
+					why: "issue",
+					failure: null,
+				},
+			],
+		});
+		const feed = await readOwnerFeed({ stateDir: root, repo, now });
+		assert.equal(
+			feed.entries.some((entry) => entry.issue === 30),
+			false,
+		);
+		assert.equal(feed.counts.blocked, 1);
+	});
+});
+
+test("answered questions count as working runs without losing their attention kind", async () => {
+	await state(async (root) => {
+		await addAnsweredRun(root, 30, "Answered");
+		const feed = await readOwnerFeed({ stateDir: root, repo, now });
+		assert.equal(feed.workingRunCount, 2);
+		assert.equal(feed.counts.question_answered, 1);
+	});
+});
+
+test("feed rejects unvalidated receipt stages and timestamp text", async () => {
+	await state(async (root) => {
+		const runId = await addRun(root, 30, "running");
+		await save(root, ["stages", runId, "build-1", "receipt.json"], {
+			version: 1,
+			runId,
+			stage: "<script>stage</script>",
+			outcome: { kind: "passed" },
+			turns: 1,
+			wallMs: 1,
+			usage: { total: 1 },
+		});
+		await save(root, ["status.json"], { repo, at: "<b>tick</b>" });
+		await save(root, ["metrics.json"], { computedAt: "**now**" });
+		const feed = await readOwnerFeed({ stateDir: root, repo, now });
+		assert.equal(feed.controller.lastTick, null);
+		assert.equal(feed.metrics.computedAt, null);
+		assert.deepEqual(
+			feed.entries.find((entry) => entry.runId === runId)?.steps,
+			[],
+		);
+	});
+});
+
+test("feed refuses public and symlinked private admission, status and verdict paths", async () => {
+	await state(async (root) => {
+		const runId = await addRun(root, 30, "running", {
+			stage: "validate",
+			title: "Private title",
+		});
+
+		const claimPath = join(root, "claims", `${runId}.json`);
+		const claim = JSON.parse(await readFile(claimPath, "utf8"));
+		await save(root, ["claims", `${runId}.json`], { ...claim, validation: {} });
+		await save(root, ["validation", runId, "verdict.json"], { pass: true });
+		const admission = join(root, "admissions/github", repo, "30/1.json");
+
+		for (const path of [
+			admission,
+			join(root, "status.json"),
+			join(root, "validation", runId),
+		])
+			await chmod(path, 0o755);
+		let feed = await readOwnerFeed({ stateDir: root, repo, now });
+		assert.equal(feed.controller.lastTick, null);
+		assert.equal(
+			feed.entries.find((entry) => entry.runId === runId)?.title,
+			"Title unavailable",
+		);
+		assert.equal(
+			feed.entries.find((entry) => entry.runId === runId)?.ci,
+			"Pending",
+		);
+		await chmod(admission, 0o600);
+		await chmod(join(root, "status.json"), 0o600);
+		await chmod(join(root, "validation", runId), 0o700);
+		const bytes = await readFile(admission);
+		await rm(admission);
+		await writeFile(`${admission}.target`, bytes, { mode: 0o600 });
+		await symlink(`${admission}.target`, admission);
+		feed = await readOwnerFeed({ stateDir: root, repo, now });
+		assert.equal(
+			feed.entries.find((entry) => entry.runId === runId)?.title,
+			"Title unavailable",
+		);
 	});
 });
 
@@ -576,7 +717,7 @@ test("a held run keeps its kind, group and runId when only the hold reason chang
 	});
 });
 
-test("L05 pins the owner header's controller state from the lock and its status read regardless of mode", async () => {
+test("the owner header reads the lock but ignores a public status file", async () => {
 	const root = await mkdtemp(join(tmpdir(), "owner-header-"));
 
 	try {
@@ -620,7 +761,10 @@ test("L05 pins the owner header's controller state from the lock and its status 
 		await rm(join(root, "controller.lock"));
 
 		await chmod(join(root, "status.json"), 0o644);
-		assert.deepEqual(await readOwnerHeader(root, now, repo), header("stopped"));
+		assert.deepEqual(await readOwnerHeader(root, now, repo), {
+			...header("stopped"),
+			controller: { state: "stopped", lastTick: null, localSwitch: "enabled" },
+		});
 		assert.deepEqual(await readOwnerHeader(root, now), {
 			repo: null,
 			at: now,
@@ -823,7 +967,7 @@ test("the owner feed and header skip the status read when no repository resolves
 		assert.equal(
 			(await ownerHeader(root, resolved.controller, now, repo)).controller
 				.lastTick,
-			"tick",
+			null,
 		);
 		assert.deepEqual(resolved.reads, ["status", "lock"]);
 	} finally {

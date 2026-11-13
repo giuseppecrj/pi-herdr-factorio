@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { isRepoSlug, type RepoSlug } from "../../src/trust/platform.ts";
-import { readLock, readStatus } from "../controller/state.ts";
+import { readLock } from "../controller/state.ts";
 import {
 	type ControllerReads,
 	type FeedEntry,
@@ -11,6 +11,7 @@ import {
 	type OwnerHeader,
 	ownerRun,
 	type RunReads,
+	localJson,
 } from "../../src/views/feed.ts";
 import { readStoredVerdict } from "../controller/state.ts";
 import { readStageReceipt } from "../sandbox/receipts.ts";
@@ -58,7 +59,7 @@ const RUN_READS: RunReads = { readStoredVerdict, readStageReceipt };
 
 function controllerReads(root: string): ControllerReads {
 	return {
-		readStatus: () => readStatus(root),
+		readStatus: async () => (await localJson(root, "status.json")) ?? null,
 		readLock: () => readLock(root),
 	};
 }
@@ -96,6 +97,7 @@ export async function readOwnerRun(
 ): Promise<FeedEntry | null> {
 	return ownerRun(stateDir, runId, feed, {
 		...RUN_READS,
-		readStatus: () => readStatus(resolve(stateDir)),
+		readStatus: async () =>
+			(await localJson(resolve(stateDir), "status.json")) ?? null,
 	});
 }

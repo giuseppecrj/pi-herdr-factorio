@@ -326,6 +326,7 @@ function groupOf(
 type ClaimHold = Readonly<{
 	runId: Digest;
 	issue: number;
+	eventId: string;
 	since: number;
 	reason: string;
 }>;
@@ -376,6 +377,7 @@ function unverifiedHolds(
 		holds.set(runId, {
 			runId,
 			issue,
+			eventId,
 			since,
 			reason: `claim_unverified:${why}${failure === null ? "" : `:${failure}`}`,
 		});
@@ -433,6 +435,7 @@ function feedbackHolds(
 		holds.set(runId, {
 			runId,
 			issue,
+			eventId,
 			pr,
 			since,
 			reason: `feedback_unavailable:${reason}${failure === null ? "" : `:${failure}`}`,
@@ -520,6 +523,13 @@ export async function readAttention(input: {
 				gaps.push(`ambiguous_issue:${claim.issue}`);
 		}
 
+		for (const hold of holds.values()) {
+			const claim = newest.get(hold.issue);
+
+			if (claim !== undefined && BigInt(claim.eventId) > BigInt(hold.eventId))
+				holds.delete(hold.runId);
+		}
+
 		for (const claim of newest.values()) {
 			if (claim.terminal && input.terminalSince !== undefined) {
 				const row = objectOf(
@@ -592,11 +602,34 @@ export async function readAttention(input: {
 			const issueUrl = `https://github.com/${claim.repo}/issues/${claim.issue}`;
 			const since = hold?.since ?? claim.enteredAt;
 
-			const snapshot = await admissions.readSnapshot({
-				repo: input.repo,
-				issue: claim.issue,
-				eventId: claim.eventId,
-			});
+			const parts = [
+				"admissions",
+				"github",
+				...input.repo.split("/"),
+				String(claim.issue),
+			];
+
+			let privateSnapshot = true;
+			let path = root;
+
+			for (const part of parts) {
+				path = join(path, part);
+
+				if (!(await privatePath(path, true))) privateSnapshot = false;
+			}
+
+			privateSnapshot &&= await privatePath(
+				join(path, `${claim.eventId}.json`),
+				false,
+			);
+
+			const snapshot = privateSnapshot
+				? await admissions.readSnapshot({
+						repo: input.repo,
+						issue: claim.issue,
+						eventId: claim.eventId,
+					})
+				: ({ kind: "unreadable" } as const);
 
 			const ageMs =
 				since === null || since > input.now ? null : input.now - since;
@@ -647,7 +680,13 @@ export async function readAttention(input: {
 		}
 
 		for (const hold of holds.values()) {
-			groups.blocked.push({
+			const entry: AttentionRun = {
+				issue: hold.issue,
+				eventId: hold.eventId,
+				stage: "admit",
+				since: hold.since,
+				terminal: false,
+				kind: "blocked",
 				runId: hold.runId,
 				issueUrl: `https://github.com/${input.repo}/issues/${hold.issue}`,
 				prUrl: null,
@@ -656,6 +695,22 @@ export async function readAttention(input: {
 				title: "Title unavailable",
 				status: "blocked",
 				stale: input.now - hold.since >= thresholds.blockedMs,
+			};
+
+			runs.push(entry);
+
+			const { runId, issueUrl, prUrl, ageMs, reason, title, status, stale } =
+				entry;
+
+			groups.blocked.push({
+				runId,
+				issueUrl,
+				prUrl,
+				ageMs,
+				reason,
+				title,
+				status,
+				stale,
 			});
 		}
 

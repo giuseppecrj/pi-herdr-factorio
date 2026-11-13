@@ -26,6 +26,7 @@ import { isRepoSlug, type RepoSlug } from "../trust/platform.ts";
 import { isDigest, type Verdict } from "../core/run.ts";
 import type { SessionOutcome } from "../core/execution.ts";
 import { FAMILY_MISSING } from "../core/models.ts";
+import { isModelStage } from "../core/stages.ts";
 
 export type FeedStep = {
 	stage: string;
@@ -95,12 +96,20 @@ export type RunReads = {
 	readonly readStageReceipt: (path: string) => Promise<StepReceipt | null>;
 };
 
-async function localJson(
+export async function localJson(
 	root: string,
 	...parts: string[]
 ): Promise<JsonValue | undefined> {
 	try {
 		let path = root;
+		const base = await lstat(root);
+
+		if (
+			!base.isDirectory() ||
+			base.uid !== process.geteuid?.() ||
+			(base.mode & 0o077) !== 0
+		)
+			return undefined;
 
 		for (const part of parts) {
 			path = join(path, part);
@@ -146,6 +155,16 @@ function thresholdsOf(
 		: undefined;
 }
 
+function timestampOf(value: JsonValue | undefined): string | null {
+	const text = textOf(value);
+
+	return text !== null &&
+		/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(text) &&
+		Number.isFinite(Date.parse(text))
+		? text
+		: null;
+}
+
 function metricOf(
 	snapshot: JsonValue | undefined,
 	repo: RepoSlug | null,
@@ -163,7 +182,7 @@ function metricOf(
 		Number(share) <= 1;
 
 	return {
-		computedAt: textOf(saved?.computedAt),
+		computedAt: timestampOf(saved?.computedAt),
 		stale: saved?.stale === true,
 		status: complete ? "Complete" : "Pending",
 		share: complete ? Number(share) : null,
@@ -215,7 +234,12 @@ async function stepReceipts(
 				continue;
 			const stage = textOf(receipt.record.stage);
 
-			if (stage === null) continue;
+			if (
+				stage === null ||
+				!isModelStage(stage) ||
+				!name.startsWith(`${stage}-`)
+			)
+				continue;
 			const previous = steps.find((step) => step.stage === stage);
 
 			if (previous === undefined)
@@ -324,6 +348,16 @@ async function detail(
 		const round = countOf(raw.round) ?? 0;
 
 		try {
+			if (
+				(await localJson(
+					root,
+					"validation",
+					entry.runId,
+					...(round === 0 ? [] : [`r${round}`]),
+					"verdict.json",
+				)) === undefined
+			)
+				throw new Error("verdict_unavailable");
 			verdict = host.readStoredVerdict(
 				join(
 					root,
@@ -476,7 +510,7 @@ export async function ownerHeader(
 					: lock.kind === "none"
 						? "stopped"
 						: "unavailable",
-			lastTick: textOf(status?.at),
+			lastTick: timestampOf(status?.at),
 			localSwitch: await fileAdmissionStore(root).localSwitch(),
 		},
 	};
@@ -552,11 +586,27 @@ export async function ownerFeed(input: {
 	let workingRunCount = 0;
 
 	if (attention.kind === "available") {
+		const newest = new Map<number, AttentionRun>();
+
 		for (const run of attention.runs) {
+			const previous = newest.get(run.issue);
+
+			if (
+				previous === undefined ||
+				BigInt(run.eventId) > BigInt(previous.eventId)
+			)
+				newest.set(run.issue, run);
+		}
+
+		for (const run of newest.values()) {
 			if (corruptIssues.has(run.issue)) continue;
 			const entry = await detail(root, run, now, input.host);
 
-			if (!entry.terminal && entry.kind === null) workingRunCount++;
+			if (
+				!entry.terminal &&
+				(entry.kind === null || entry.kind === "question_answered")
+			)
+				workingRunCount++;
 
 			if (entry.kind !== null) typedCounts[entry.kind]++;
 
@@ -566,31 +616,6 @@ export async function ownerFeed(input: {
 			)
 				continue;
 			entries.push(entry);
-		}
-
-		for (const held of attention.groups.blocked) {
-			if (entries.some((entry) => entry.runId === held.runId)) continue;
-			const issue = Number(held.issueUrl.split("/").at(-1));
-
-			if (!Number.isSafeInteger(issue) || corruptIssues.has(issue)) continue;
-			typedCounts.blocked++;
-			entries.push({
-				...held,
-				issue,
-				eventId: "",
-				stage: "admit",
-				since: held.ageMs === null ? null : now - held.ageMs,
-				terminal: false,
-				kind: "blocked",
-				group: "needs_you",
-				round: null,
-				tokens: null,
-				cap: null,
-				ci: "Pending",
-				failure: null,
-				notProven: [],
-				steps: [],
-			});
 		}
 	}
 

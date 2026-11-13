@@ -40,15 +40,14 @@ The VM figure comes from the independent verifier's run of ten CLI reads on the 
 
 **Allowed read rate (proposal).** The code enforces no rate. Read at most once every 5 seconds while the app is open and once every 60 seconds in the background. Keep one read in flight. On the VM, one CLI read takes about 620 ms of wall time, so one read every 5 seconds uses about 12% of each 5-second slot. One read every 60 seconds uses about 1%. The proposed rates still hold at that cost.
 
-The bridge must run as the Unix user that owns the state directory. Most of the feed's file reads ignore a file that is a symlink, is owned by another user, or is readable by group or others. Those readers are `localJson` (`src/views/feed.ts:102`, which checks every path part below the state directory) and `privatePath` and `privateJson` (`src/views/attention.ts:131` and `src/views/attention.ts:145`, which check the state directory, `claims/` and each file they open). These readers do not check:
+The bridge must run as the Unix user that owns the state directory. The feed checks private status files, admission snapshots, stage receipts and validation verdicts before reading them. It rejects symlinks, foreign owners and group or other permissions, including each directory below the state root. Admission snapshots still require a matching receipt and snapshot digest.
 
-- `status.json` through `readStatus` (`host/controller/state.ts:65`), which supplies the thresholds, the unreadable list and `controller.lastTick`. It follows symlinks and ignores owner and mode.
-- The admission snapshot that supplies `title` (`src/trust/admission.ts:490` to `src/trust/admission.ts:513`). It uses a plain `readFile`.
-- The local switch (`src/trust/admission.ts:524`). It checks that the state directory belongs to the user and is not group or other writable, and it does not check the `disabled` file's owner.
-- The controller lock, which sets `controller.state`. `readOwnerHeader` in `host/cli/owner-feed.ts` reads it through `readLock` (`host/controller/state.ts:84`).
-- The stored verdict (`readStoredVerdict`, `host/controller/state.ts:74`, through `regularBytes`, `src/contract/artifacts.ts:232`). It rejects a symlink and a group- or other-accessible file, and does not check the owner.
+Two host probes deliberately keep different rules:
 
-A bridge running as another user usually gets an unavailable feed, not an error, because the state directory itself fails the check. This PR does not harden the unchecked readers.
+- The local switch checks that the state directory belongs to the user and is not group or other writable. Any `disabled` entry, including a dangling symlink or an entry owned by another user, disables admission. Its contents are never read.
+- The controller lock uses `readLock` in `host/controller/state.ts`. It probes the controller socket and reads the holder file without the feed's private-file checks. It supplies only `running`, `stopped` or `unavailable`, never holder text.
+
+A bridge running as another user usually gets an unavailable feed, not an error, because the state directory itself fails the check. These checks apply to feed reads, not a change to the admission or status CLI's storage policy.
 
 ### Detect an unavailable feed
 
@@ -68,7 +67,7 @@ An unreadable state directory is a successful read with no data. The CLI exits 0
 | `controller.localSwitch` | string | `enabled`, `disabled` (the hold is on) or `unavailable`. |
 | `entries` | array | One entry per issue. Newest `since` first. Finished runs stay for 7 days. |
 | `counts` | object | One number per attention kind, always all seven keys. |
-| `workingRunCount` | number | Runs that are not finished and have no attention kind. |
+| `workingRunCount` | number | Runs that are not finished and have no attention kind or have kind `question_answered`. Published refresh holds remain counted as `blocked`. |
 | `durableUsage` | object | `kind` is `exact`, `lower_bound`, `uncertain` or `unavailable`. `total` is a number or null. |
 | `unreadable` | array | `{issue, issueUrl, reason}` for issues whose run history is corrupt. These issues have no entry. |
 | `gaps` | array of string | Codes for evidence the read could not use. |
@@ -92,7 +91,7 @@ An entry (`FeedEntry`, `src/views/feed.ts:43`) has these fields.
 | --- | --- | --- |
 | `issue` | number | The GitHub issue number. |
 | `runId` | string | 64 hexadecimal characters. Changes with every admission event. |
-| `eventId` | string | The admission event, as a decimal string. It is `""` on a hold-only entry. |
+| `eventId` | string | The admission event, as a decimal string, including unverified discoveries that have no claim file yet. |
 | `stage` | string | `admit`, `specify`, `accept`, `build`, `validate`, `review` or `land`. |
 | `status` | string | The run's claim status, such as `running`, `needs_info`, `waiting`, `failed` or `landed`. |
 | `kind` | string or null | The attention kind, or null when the run needs nobody. |
@@ -117,7 +116,7 @@ A `FeedStep` has these members.
 
 | Member | Type | Meaning |
 | --- | --- | --- |
-| `stage` | string | The stage the receipt names. |
+| `stage` | string | `specify`, `accept`, `build` or `review`, matching the receipt directory's stage. Invalid or mismatched receipts are skipped. |
 | `outcome` | string | The receipt's outcome kind, such as `passed`, `refused`, `failed` or `budget_exhausted`. |
 | `wallMs` | number or null | Wall time of the stage, in milliseconds. |
 | `tokens` | number or null | Tokens the stage used. |
@@ -170,9 +169,11 @@ Use these keys:
 
 An issue in `unreadable` has no entry. Its key is still `repo` plus `issue`.
 
-### Known limit, one issue can appear twice
+### Unverified discoveries
 
-Reproduced on 2026-11-10. An older run of an issue can still be listed in `status.json` under `unverifiedClaims`. When the issue also has a newer run, the feed has two entries for the issue. The second has `kind: "blocked"`, `eventId: ""`, `title: "Title unavailable"` and `reason: "claim_unverified:issue"`. It also adds one to `counts.blocked` (`src/views/attention.ts:655`, `src/views/feed.ts:572` to `src/views/feed.ts:594`). The bridge must apply the collapse key to both entries. The empty-`eventId` entry can be the newer run. `test/src/views/attention.test.ts:623` builds that case, where the held run has `eventId` 2 and the listed claim is its predecessor. The feed discards the hold's event id (`src/views/feed.ts:572` to `src/views/feed.ts:581`), so v1 cannot tell which of the two entries is newer. Do not select the latest run. Keep the attention signal instead. If either entry for a key has `group: "needs_you"`, the key needs the owner. Take the fingerprint of a key with two entries as the set of fingerprints of its `needs_you` entries. This is a product defect, reported and not fixed.
+The feed compares admission event IDs numerically across claims and unverified discoveries, then emits only the newest entry for an issue. A stale `unverifiedClaims` record does not add another entry or increase `counts.blocked`. A newer unverified discovery replaces the earlier claim with a blocked entry and retains its decimal `eventId`.
+
+Existing v1 clients need no change for #731. The bridge may remove its duplicate-entry workaround after every configured controller has this fix. Keep the stable key and decision fingerprint.
 
 ## Actions
 
@@ -197,8 +198,8 @@ Only `title` carries free text from outside the factory, and `plainTitle` is its
 | `entries[].notProven` | Fixed sentences from `renderLimitation` (`src/candidate/handoff.ts:2710`), and one fallback sentence (`src/views/feed.ts:393`). | Criterion and scenario IDs appear only when they match `A<n>` or `S<n>`. A judgment outcome appears only as a value of `JUDGMENT_OUTCOMES` (`src/candidate/review.ts:74`). Criterion text, scenario text and review reasons never appear. |
 | `gaps[]` | The controller. | Fixed codes (`unrecognized_claim`, `state_unavailable`), or a code with an issue number or a 12-character run prefix (`invalid_claim:<12 characters>`, `ambiguous_issue:<n>`, `candidate_book_unavailable:<12 characters>`, `invalid_link:<12 characters>`). |
 | `unreadable[].reason` | The controller. | One constant sentence (`src/views/feed.ts:539`). |
-| `entries[].steps[].stage` | A stage receipt the controller wrote. | Any string. The receipt's directory name is checked, the `stage` field inside it is not (`src/views/feed.ts:220`). |
-| `controller.lastTick`, `metrics.computedAt` | Files the controller wrote. | Any string. |
+| `entries[].steps[].stage` | A stage receipt the controller wrote. | A model stage name matching its directory. |
+| `controller.lastTick`, `metrics.computedAt` | Files the controller wrote. | A UTC timestamp with seconds and optional three-digit milliseconds. Invalid text becomes null. |
 
 Render every string in the feed as plain text. A client that shows `title` as Markdown or HTML will show markup from the issue.
 
