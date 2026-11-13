@@ -22,18 +22,21 @@ Read `.pi/skills/verify-factory/features/README.md` for the feature map and the 
 
 ## Target
 
-At this checkout, `vm.sh` and `lane-setup.sh` source `target.sh`, which reads `FACTORY_VM` and `targets.env`. Inspect those files before use. `FACTORY_VM` defaults to the retiring `pi-factorio`, so never omit it. The configured `nubl-factory` entry is not proof of an installation or authority to connect. `factorio` remains unconfigured.
+`vm.sh` and `lane-setup.sh` source `target.sh`, which reads `FACTORY_VM` and `targets.env`. `FACTORY_VM` still defaults to `pi-factorio`, so never omit it. `factorio` remains unconfigured.
 
-The Arm receipt reported hardcoded SSH routing in the old VM checkout `349934b`, which ignored `FACTORY_VM`. That observation does not describe this branch or the L01 base `3bcd19f`, whose scripts already select a target through `target.sh`. L01 changes no script and adds no disposable-target support. L02 must reconcile the maintained drivers with the layout program before any lane uses them. Do not infer a safe target from an environment variable alone.
+| Target | Role | Reach from the agent host | Allowed |
+| --- | --- | --- | --- |
+| `nubl-factory` | Production since 2026-11-13 (#734), held | Yes. Giuseppe tagged it `tester`, so the `Headless-Agent-Key` reaches it. | Routine read-only checks: hold file, `factory.service` state and restarts, the journal, `status --json`, `owner-feed --json`. Bridge install, upgrades, the hold-lift (#735) and fixture runs each need Giuseppe's go. Never delete, copy over or retag it. |
+| `pi-factorio` | Retired production, stopped, disabled and held, state archived | No | Nothing from this host. Deleting it waits on Giuseppe. |
 
-For an explicitly authorized retiring-host read only:
+A read-only check on production:
 
 ```bash
 S=.pi/skills/verify-factory/scripts
-FACTORY_VM=pi-factorio "$S/vm.sh" "$S/doctor.sh"
+FACTORY_VM=nubl-factory "$S/vm.sh" "$S/doctor.sh"
 ```
 
-Unknown targets, empty values, and invalid target records refuse before SSH. The helpers still assume the `exedev` user and `/home/exedev/factory-verification/`. They are not general-purpose disposable-VM drivers. The [installer recipe](features/installer.md) uses direct SSH to an explicit disposable target. No lane uploads, provisions, or starts a controller on `pi-factorio` during the layout program. Its only reads are Arm and L15.
+Do not run lane helpers that write (`lane-setup.sh`, `drive-*.sh`) against `nubl-factory`. Unknown targets, empty values, and invalid target records refuse before SSH. The helpers assume the `exedev` user and `/home/exedev/factory-verification/`. They are not general-purpose disposable-VM drivers. The [installer recipe](features/installer.md) uses direct SSH to an explicit disposable target.
 
 ## Launch
 
