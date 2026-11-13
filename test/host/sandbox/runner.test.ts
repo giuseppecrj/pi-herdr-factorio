@@ -5392,6 +5392,12 @@ describe("pinned zero-token accept replay", () => {
 		const forwarded: string[] = [];
 
 		const capture = createServer((req, res) => {
+			if (req.method !== "POST" || req.url !== "/openai/v1/responses") {
+				res.writeHead(404).end();
+
+				return;
+			}
+
 			const chunks: Buffer[] = [];
 			req.on("data", (chunk) => chunks.push(chunk));
 			req.on("end", () => {
@@ -5499,6 +5505,10 @@ describe("pinned zero-token accept replay", () => {
 			const bodies: string[] = [];
 			const events: ControlEvent[] = [];
 			const offset = forwarded.length;
+			assert.equal(
+				(await fetch(`http://127.0.0.1:${address.port}/`)).status,
+				404,
+			);
 
 			let handle: GatewayHandle | null = null,
 				journal = "",

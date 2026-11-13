@@ -4231,7 +4231,7 @@
 				"\"../../../.pi/skills/verify-factory/scripts/drive-replay.sh\"": 1,
 				"\"../../../.pi/skills/verify-factory/scripts/drive-replay.ts\"": 1,
 				"new URL(\"../../fixtures/layout-host/old-provision.sh\", import.meta.url)": 1,
-				"new URL(\"../../../host/install/provision.sh\", import.meta.url)": 1
+				"new URL( \"../../fixtures/layout-host/relocated-provision.sh\", import.meta.url, )": 1
 			},
 			"targets": [
 				{
@@ -4291,11 +4291,11 @@
 					}
 				},
 				{
-					"path": "host/install/provision.sh",
+					"path": "test/fixtures/layout-host/relocated-provision.sh",
 					"type": "file",
 					"via": {
 						"from": "reader",
-						"path": "../../../host/install/provision.sh"
+						"path": "../../fixtures/layout-host/relocated-provision.sh"
 					}
 				}
 			]

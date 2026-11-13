@@ -1768,7 +1768,10 @@ describe("L05 installed bundle pins", () => {
 			);
 
 			const newRecipe = await readFile(
-				new URL("../../../host/install/provision.sh", import.meta.url),
+				new URL(
+					"../../fixtures/layout-host/relocated-provision.sh",
+					import.meta.url,
+				),
 				"utf8",
 			);
 
