@@ -2,7 +2,7 @@
 
 Use this guide to inspect a factory handoff, decide whether to merge, and confirm the controller recorded your action. The factory never merges or arms auto-merge. Approval alone does not resume an automatic merge path.
 
-F09a implements this protocol locally. Main-backed reporter/P4 proof, production protection, real owner-action lanes, and live/performance qualification remain pending. A source check, scratch GitHub experiment, or saved-state test is not a certified factory run. See the [plan's F09a gates](../plans/factory-v1.md#hand-off-verified-prs-and-require-human-merge-f09a) and [formal proof limits](../statecharts/README.md).
+F09a implements this protocol locally. Main-backed reporter/P4 proof, production protection, real owner-action lanes, and live/performance qualification remain pending. A source check, scratch GitHub experiment, or saved-state test is not a certified factory run. See the [plan's F09a gates](../plans/active/factory-v1.md#hand-off-verified-prs-and-require-human-merge-f09a) and [formal proof limits](../models/README.md).
 
 ## Inspect the handoff
 

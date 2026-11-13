@@ -5,7 +5,7 @@ description: Rerun the existing bounded factory state checks and runtime corresp
 
 # Verify bounded factory state
 
-Use this wrapper for the existing checks in [docs/statecharts/README.md](../../../docs/statecharts/README.md). It adds no model, proof, or release gate. Run commands from the repository root. No VM, GitHub mutation, or model inference is needed.
+Use this wrapper for the existing checks in [docs/models/README.md](../../../docs/models/README.md). It adds no model, proof, or release gate. Run commands from the repository root. No VM, GitHub mutation, or model inference is needed.
 
 The checked promise is that modeled candidate work uses bound CI and settled execution evidence before readiness or terminal bookkeeping. A violation can certify the wrong head, lose charged work, or finish while work remains live. An owner may merge an uncertified head. The model must record that as an owner override, not forbid it.
 
@@ -31,7 +31,7 @@ F1, F2, and F3 use the owner-approved `tla-ts` 0.0.8 CLI with Node, `timeout`, a
 
 Record the exact HEAD/tree, Node version, checker version/hash, commands, exits, wall time, state counts, queue, and complete logs in a private output directory. Hash the model and configs on every run. Compare them with this historical qualification record before reusing evidence:
 
-| File under `docs/statecharts/` | SHA-256 |
+| File under `docs/models/` | SHA-256 |
 | --- | --- |
 | `journey/Journey.tla` | `d01519d194898cbdf272fb7a214aeb503bd8ea0d8055c655ba0c6f8ffa9ab845` |
 | `journey/Journey.cfg` | `527ce37abb50939091de41d9ad141edcc6e62ce3805cd19f1bb0aff3603236f5` |
@@ -44,7 +44,7 @@ Record the exact HEAD/tree, Node version, checker version/hash, commands, exits,
 | `controller/Controller.tla` | `498fe16f509c1b8bb23e1988c056bb49414e877f703993c81538ae4a0b65a5a6` |
 | `controller/Chart.cfg` | `aedbc63300b06b9f1a4650efad5bb8c1794343fcc307d77d2c44106993fd8f0f` |
 
-Use `sha256sum docs/statecharts/journey/*.tla docs/statecharts/journey/*.cfg docs/statecharts/controller/*.tla docs/statecharts/controller/*.cfg` for the current inventory. `controller/Controller.cfg` belongs to the historical F09a row in the README, with hash `ddc0cae91effbed82a890574c14f24b6af9abd5822532ea29465fb746b326bae`. It is not an F10 qualification file. Record the F4 runner hash too. A hash mismatch invalidates unchanged-model evidence until reviewed. Never reduce a bound to obtain a pass.
+Use `sha256sum docs/models/journey/*.tla docs/models/journey/*.cfg docs/models/controller/*.tla docs/models/controller/*.cfg` for the current inventory. `controller/Controller.cfg` belongs to the historical F09a row in the README, with hash `ddc0cae91effbed82a890574c14f24b6af9abd5822532ea29465fb746b326bae`. It is not an F10 qualification file. Record the F4 runner hash too. A hash mismatch invalidates unchanged-model evidence until reviewed. Never reduce a bound to obtain a pass.
 
 ## Run the existing checks
 
@@ -54,7 +54,7 @@ Create the temporary parent directory first. Run this in bash after resolving `T
 set -eu
 : "${TLA_TS_CLI:?Set this to the installed tla-ts 0.0.8 dist/cli.js}"
 CHECKER="$TLA_TS_CLI"
-J=docs/statecharts/journey
+J=docs/models/journey
 OUT=$(mktemp -d "${TMPDIR:-$HOME/.herdr/tmp}/factory-state.XXXXXX")
 node --version > "$OUT/node-version.txt"
 sha256sum "$CHECKER" "$J"/*.tla "$J"/*.cfg > "$OUT/hashes.txt"

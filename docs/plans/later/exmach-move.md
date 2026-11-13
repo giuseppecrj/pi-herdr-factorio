@@ -10,13 +10,13 @@ Items #717 (F13 Linear) and #718 (bootstrap kit) stay outside this plan. Appendi
 
 ## How to read this
 
-**Parked, 2026-11-10.** The owner set a three-phase roadmap. Phase 1 is Shep as the daily client, phase 2 the software factory run from Shep, and phase 3 is exmach. The move to exmach is parked. Factorio's first real host is a new exe.dev VM, `nubl-factory`, which the owner installs by hand with the one-command installer from #743 (`docs/operations/install-exe-dev.md`). `pi-factorio` is drained (#712) and retired once `nubl-factory` works (#734). A dedicated VM on ms-a2 comes later and is only planned (#730, `docs/plans/factorio-vm.md`). `MV1` (#724), `MV2` (#721) and `MV6` (#722) are on `main` and stay useful, because the platform profile and the verification targets are host-neutral. `MV3` landed through #743 as the installer's provisioning. `MV4`, `MV5` and `MV8` are parked as written, and `MV7` waits with them. `MV4`'s drain and foreign-marker work stays on branches `mv4-drain-foreign-markers` and `mv4b-ci-bot`. It is needed only for a move that changes the controller's GitHub identity, such as the later ms-a2 VM. The move to `nubl-factory` keeps the exe.dev identity.
+**Parked, 2026-11-10.** The owner set a three-phase roadmap. Phase 1 is Shep as the daily client, phase 2 the software factory run from Shep, and phase 3 is exmach. The move to exmach is parked. Factorio's first real host is a new exe.dev VM, `nubl-factory`, which the owner installs by hand with the one-command installer from #743 (`docs/operations/install-exe-dev.md`). `pi-factorio` is drained (#712) and retired once `nubl-factory` works (#734). A dedicated VM on ms-a2 comes later and is only planned (#730, `docs/plans/later/factorio-vm.md`). `MV1` (#724), `MV2` (#721) and `MV6` (#722) are on `main` and stay useful, because the platform profile and the verification targets are host-neutral. `MV3` landed through #743 as the installer's provisioning. `MV4`, `MV5` and `MV8` are parked as written, and `MV7` waits with them. `MV4`'s drain and foreign-marker work stays on branches `mv4-drain-foreign-markers` and `mv4b-ci-bot`. It is needed only for a move that changes the controller's GitHub identity, such as the later ms-a2 VM. The move to `nubl-factory` keeps the exe.dev identity.
 
 One box is one unit of work. Every box names the evidence that checks it. A nested box is a sub-step of the box above it. Check a box only when its evidence exists, such as a file, a log, a test result, or a SHA. The body is a how-to. The appendices explain and record.
 
 The program runs the poteto-mode playbook `playbooks/autopilot-stack.md`. No current grant names merging this program's PRs. The `autonomous-run` grant of 2026-11-10T00:03Z named F09c paperwork, F11, F12 and F13, and the `owner-checkpoint-f12` row ended that run. So every PR here stops at STACK-READY and the owner lands it. Commits, branches, pushes, PR creation, fixture issues, VM changes and the exmach VM itself each need their own grant, recorded in `docs/decisions.tsv` before the action. This document grants nothing.
 
-Use the **Factory CLI control procedure** from `docs/plans/factory-v1.md` as the control skill, through `.pi/skills/verify-factory/`. This backend has no visual surface except `MV8`'s Factory tab and pushes in Shep. Live lanes save redacted logs, JSON snapshots and issue or PR URLs in place of screenshots. `MV2` makes the control skill reach the exmach VM. Until exmach E2 exists, every live lane that needs the exmach VM is `BLOCKED`, never passed by a substitute.
+Use the **Factory CLI control procedure** from `docs/plans/active/factory-v1.md` as the control skill, through `.pi/skills/verify-factory/`. This backend has no visual surface except `MV8`'s Factory tab and pushes in Shep. Live lanes save redacted logs, JSON snapshots and issue or PR URLs in place of screenshots. `MV2` makes the control skill reach the exmach VM. Until exmach E2 exists, every live lane that needs the exmach VM is `BLOCKED`, never passed by a substitute.
 
 The Kyoko root session coordinates integration between Factorio, exmach and Shep (decision C1 in nublai/root `.pi/plan/integration.md`). This program works only in this repository. It files no issues and posts no comments in giuseppecrj/exmach or giuseppecrj/shep. Each reply to the owner that needs something from those projects ends with a **For other projects** heading, and the Kyoko session relays it.
 
@@ -57,7 +57,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
   - [ ] `MV5` starts after the owner lands `MV1` to `MV4` and giuseppecrj/exmach#100 and E1 to E4 are closed.
   - [ ] `MV7` branches from `main` after the owner lands `MV5`.
   - [ ] `MV8` starts after the owner lands `MV5` and `MV6` and the other-project gates for `MV8` close.
-  - [ ] After `MV5`, F12d and F12e resume on the exmach VM under `docs/plans/factory-v1.md`. Carry the replay budget file per the `replay-cap-raise-4m` row. `MV5` now waits for exmach's self-host install milestone (giuseppecrj/exmach#100) too, so `MV1` to `MV4` and `MV6` land well before the cutover. `MV4` still lands only after the drain, because it switches CI's expected actor.
+  - [ ] After `MV5`, F12d and F12e resume on the exmach VM under `docs/plans/active/factory-v1.md`. Carry the replay budget file per the `replay-cap-raise-4m` row. `MV5` now waits for exmach's self-host install milestone (giuseppecrj/exmach#100) too, so `MV1` to `MV4` and `MV6` land well before the cutover. `MV4` still lands only after the drain, because it switches CI's expected actor.
 - [ ] Hold the file boundaries. Each PR touches only its **Files** block. No agent edits `.github/`. The owner authorized the coordinator to make the two `.github/workflows/` edits in `MV4`.
 - [ ] Hold the review gate. `MV8` proves what reaches the owner's phone. It waits for the owner's review in chat with a screenshot and a video before landing.
 - [ ] Run the `how` skill walkthrough before `MV1`, because it sets security-relevant constants. Bring the owner only product calls.
@@ -70,7 +70,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 - [ ] Run a manual diff cleanup pass before each commit and `/skill:no-comments` before review. Keep every `SAFETY:` comment that `.oxlintrc.json` requires.
 - [ ] Triage every Bugbot and security-reviewer comment per `<pstack>/skills/poteto-mode/references/bugbot-triage.md`.
 - [ ] Rebase onto the parent branch, or `main` for a stack root, before the code-ready report and babysit. Keep that merge base in fix rounds. Rebase again only at merge prep, on a `git merge-tree` conflict with trunk, on a CI failure that comes from a change on trunk, or when a known concurrent change to the same files lands.
-- [ ] After any edit to `docs/plans/factory-v1.md`, run `node <pstack>/skills/poteto-mode/scripts/check-plan.mjs docs/plans/factory-v1.md`. It must print `22 PR sections, 0 problems`. Run the same script on this file after each edit.
+- [ ] After any edit to `docs/plans/active/factory-v1.md`, run `node <pstack>/skills/poteto-mode/scripts/check-plan.mjs docs/plans/active/factory-v1.md`. It must print `22 PR sections, 0 problems`. Run the same script on this file after each edit.
 
 ### Verdict and merge, for every PR
 
@@ -385,7 +385,7 @@ Each live lane runs at the PR head through the Factory CLI control procedure.
 
 - [ ] Create `docs/operations/owner-feed.md`, the OwnerFeed v1 contract for the Shep bridge.
 - [ ] Edit `docs/operations/viewer.md` for loopback only on exmach, with the bridge reading the feed.
-- [ ] Edit the F09d section of `docs/plans/factory-v1.md` to record the decision and narrow the unit.
+- [ ] Edit the F09d section of `docs/plans/active/factory-v1.md` to record the decision and narrow the unit.
 - [ ] Create one redacted capture per attention kind under `test/fixtures/owner-feed/` and cases in `test/feed.test.ts`.
 
 **Build.**
@@ -565,7 +565,7 @@ These questions stay unproven.
 - **Profile in the trusted `WORKFLOW.md`.** Rejected as the default. The forbidden-domain list guards the host the controller runs on, so it belongs to the host, not to repository content. The walkthrough may reverse this with evidence.
 - **Accept a list of historical bot logins.** Rejected by the owner's drain decision. It changes a trust check and leaves a standing risk.
 - **Viewer `--bind` for the exmach app proxy (#714 option A).** Rejected by the owner on 2026-11-10 in favour of Shep only. Revisit only if the browser dashboard is missed.
-- **Adding these PRs to `docs/plans/factory-v1.md`.** Rejected because its checker must print `22 PR sections`.
+- **Adding these PRs to `docs/plans/active/factory-v1.md`.** Rejected because its checker must print `22 PR sections`.
 - **A dedicated Factorio app (F09d's old lean).** Rejected by the owner under R25. The owner UI is a Factory tab in Shep.
 - **The controller pushing through `apns.int`.** Rejected under R25. The Shep bridge sends from the feed, so the controller gains no new egress.
 - **Folding the verification skill repoint into `MV3`.** Rejected so the lanes can reach the exmach VM before provisioning code lands.
@@ -580,7 +580,7 @@ These questions stay unproven.
 - **Backups (MV5).** exmach finishes M5 (giuseppecrj/exmach#29) before E1 to E4, so an off-host target should exist at cutover. Until it is proven, `backup.md` runs manually to an off-VM target.
 - **Residual risk unchanged.** A bwrap escape lands on `exedev` with sudo, and the edge's GitHub integration answers any VM process, per `docs/operations/sandbox.md` section 1.2.
 - **Spend.** `MV5` and `MV7` run full tickets at about 540,000 reserved tokens each. Check the program cap with the owner before they launch.
-- **Out of scope.** #717 rewrites F13's credential section in `docs/plans/factory-v1.md` in its own docs PR before F13 starts. #718 becomes its own plan after `MV5` and giuseppecrj/exmach#83.
+- **Out of scope.** #717 rewrites F13's credential section in `docs/plans/active/factory-v1.md` in its own docs PR before F13 starts. #718 becomes its own plan after `MV5` and giuseppecrj/exmach#83.
 - **Shep's open questions (MV6).** Shep asked five feed questions on #719. Shep's Factory tab waits on `MV6`'s answers in `owner-feed.md`.
 - **Phone path in other projects (MV8).** `MV8` depends on the `apns` attach in E2, exmach#88, shep#107, a bridge on the VM and shep#140. exmach schedules #88 after Shep's runtimes seam, so `MV8` lands well after the cutover. The Kyoko session tracks them.
 - **Provisional GitHub host (MV1, MV2).** `factorio.int.exmach.net` is confirmed only until E1 and E2 land. A change needs only a `ghHost` override in `/etc/factory/platform.json` and the `factorio` line in `targets.env`.

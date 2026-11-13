@@ -14,7 +14,7 @@
 | `host/bundle/` | `manifest.ts` compares source assets with installed content. `assets/` ships into the same bundle-relative names as before relocation. |
 | `host/install/` | The exe.dev installer, provisioner and service unit. See `docs/operations/install-exe-dev.md`. |
 
-The collectors in `host/cli/owner-feed.ts` and `host/cli/measurement.ts` read host state for `src/views/feed.ts` and `src/views/explain.ts`. See `docs/operations/sandbox.md` for the sandbox boundary and `scripts/README.md` for generated viewer tokens and path guards. `docs/plans/codebase-layout.md` records the migration contract.
+The collectors in `host/cli/owner-feed.ts` and `host/cli/measurement.ts` read host state for `src/views/feed.ts` and `src/views/explain.ts`. See `docs/operations/sandbox.md` for the sandbox boundary and `scripts/README.md` for generated viewer tokens and path guards. `docs/plans/later/codebase-layout.md` records the migration contract.
 
 ## Change a path
 

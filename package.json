@@ -26,9 +26,9 @@
     "check": "npm run typecheck && npm run lint && npm run format:check && npm run check:layout && npm run check:decisions && npm test && npm run test:integration",
     "check:decisions": "node scripts/check-decisions.mjs",
     "check:layout": "node --experimental-strip-types scripts/check-layout.mjs",
-    "format": "biome format --write src extension host test .pi/skills docs/statecharts",
-    "format:check": "biome format src extension host test .pi/skills docs/statecharts",
-    "lint": "oxlint src extension host test .pi/skills docs/statecharts",
+    "format": "biome format --write src extension host test .pi/skills docs/models",
+    "format:check": "biome format src extension host test .pi/skills docs/models",
+    "lint": "oxlint src extension host test .pi/skills docs/models",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "node --experimental-strip-types --test --test-concurrency=1 \"test/src/**/*.test.ts\" \"test/host/**/*.test.ts\"",
     "test:integration": "node --experimental-strip-types --test --test-concurrency=1 test/integration/*.test.ts"

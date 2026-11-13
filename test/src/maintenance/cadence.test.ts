@@ -1378,7 +1378,7 @@ describe("bounded single-pass cadence excerpts", () => {
 		assert.equal(cadenceEligiblePath("src/code.generated.ts"), false);
 		assert.equal(cadenceEligiblePath("server/code.min.js"), false);
 		assert.equal(cadenceEligiblePath("test/fixtures/huge.json"), false);
-		assert.equal(cadenceEligiblePath("docs/prototypes/big.md"), false);
+		assert.equal(cadenceEligiblePath("docs/history/prototypes/big.md"), false);
 		assert.equal(cadenceEligiblePath("yarn.lock"), false);
 		assert.equal(cadenceEligiblePath("pnpm-lock.yaml"), false);
 

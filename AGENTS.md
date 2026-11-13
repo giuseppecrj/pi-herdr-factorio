@@ -4,9 +4,9 @@ This repository builds a GitHub-first software factory. Authorized issues pass t
 
 ## Start here
 
-1. Read `docs/plans/codebase-layout.md` for the active L00 to L15 program under poteto-mode's `autopilot-stack` playbook. Read `docs/plans/factory-v1.md` for the factory program's historical state and remaining evidence gaps. Use `git log` to confirm what landed.
+1. Read `docs/plans/later/codebase-layout.md` for the L00 to L15 layout program run under poteto-mode's `autopilot-stack` playbook, its completed-PR evidence, its pending owner actions, and the owner's post-program checklist. Read `docs/plans/active/factory-v1.md` for the factory program's historical state and remaining evidence gaps. Use `git log` to confirm what landed.
 2. Read `docs/decisions.tsv` for decisions, grants, and verdicts. Only the coordinator appends rows, using the installed pstack `show-me-your-work` skill's `log.sh`. Preserve every historical row. New rows ship with the next docs PR. A grant covers only the scope its row names. Later rows can narrow or withdraw it.
-3. Read the latest `.pi/daily-log/` file in this repo, when present. The coordinator handoff is the newest `RESUME-*.md` in the private trails checkout, `../pi-herdr-factorio-trails/` beside the root checkout. It lists the grants in force. `docs/handoff.md` is historical evidence, not authority.
+3. Read the latest `.pi/daily-log/` file in this repo, when present. The coordinator handoff is the newest `RESUME-*.md` in the private trails checkout, `../pi-herdr-factorio-trails/` beside the root checkout. It lists the grants in force. `docs/history/handoff.md` is historical evidence, not authority.
 
 One session coordinates the program. Children follow their bounded briefs and are leaves unless their brief allows delegation. If coordination ownership is unclear, ask the owner before acting. Resolve `<pstack>` from the installed skill inventory, not a workstation path.
 

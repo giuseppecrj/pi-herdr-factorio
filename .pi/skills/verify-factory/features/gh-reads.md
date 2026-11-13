@@ -27,4 +27,4 @@ Preconditions:
 ## Gotchas
 
 - This feature is read-only. Creating issues, labels or comments needs the fixture grant.
-- If a factory label is renamed, `drive-gh.sh` reports it missing. Update the label list in the script and in `docs/design.md` together.
+- If a factory label is renamed, `drive-gh.sh` reports it missing. Update the label list in the script and in `docs/architecture.md` together.

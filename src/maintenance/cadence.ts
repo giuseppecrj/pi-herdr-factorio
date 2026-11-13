@@ -168,7 +168,7 @@ export function cadenceEligiblePath(path: string): boolean {
 		!path.toLowerCase().startsWith(ACCEPTANCE_SUITE_PREFIX) &&
 		!/^test\/fixtures\//i.test(path) &&
 		!path.startsWith("research/") &&
-		!path.startsWith("docs/prototypes/")
+		!path.startsWith("docs/history/prototypes/")
 	);
 }
 

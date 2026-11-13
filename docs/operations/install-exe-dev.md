@@ -36,13 +36,28 @@ For another repository, change the script URL to the repository containing the i
 
 This example is separate from the production command above. Use it only under the fixture and disposable-VM grants. The coordinator prepares a fixture commit derived from the exact product SHA, changing only the platform default repository list and the repository field in the fixture's trusted workflow. Record both SHAs and that two-field diff. `--repo` alone cannot make a product revision accept another repository.
 
-SSH to `exedev@<disposable-name>.exe.xyz`, then use the fixture repository for both the pinned download and the selected repository:
+The fixture repository `nublai/pi-herdr-factorio-layout-fixture` is private, so `raw.githubusercontent.com` answers 404 for it. Fetch the pinned installer through the disposable VM's own GitHub integration instead, the same `github.int.exe.xyz` API route the installer's preflight uses. Attach an integration scoped to the fixture repository first, as the preflight's `github_integration` refusal describes. The installer never receives a credential.
+
+Before touching the VM, compute the installer's expected hash from the pinned fixture commit in a fixture checkout, and record it with both SHAs:
 
 ```bash
 C=<full-fixture-sha>
-curl -fsSL https://raw.githubusercontent.com/nublai/pi-herdr-factorio-layout-fixture/$C/host/install/install-exe-dev.sh | bash -s -- --check --repo nublai/pi-herdr-factorio-layout-fixture --vm <disposable-name> "$C"
-curl -fsSL https://raw.githubusercontent.com/nublai/pi-herdr-factorio-layout-fixture/$C/host/install/install-exe-dev.sh | bash -s -- --repo nublai/pi-herdr-factorio-layout-fixture --vm <disposable-name> "$C"
+git -C <fixture-checkout> show "$C:host/install/install-exe-dev.sh" | sha256sum
 ```
+
+SSH to `exedev@<disposable-name>.exe.xyz`. Fetch the installer from the fixture repository at `$C`, check it against that hash, then use the fixture repository for the selected repository too:
+
+```bash
+C=<full-fixture-sha>
+E=<sha256-from-the-pinned-commit>
+F=/tmp/install-exe-dev-$C.sh
+curl --noproxy '*' -fsS -H 'Accept: application/vnd.github.raw' "https://github.int.exe.xyz/api/v3/repos/nublai/pi-herdr-factorio-layout-fixture/contents/host/install/install-exe-dev.sh?ref=$C" -o "$F"
+echo "$E  $F" | sha256sum -c -
+bash "$F" --check --repo nublai/pi-herdr-factorio-layout-fixture --vm <disposable-name> "$C"
+bash "$F" --repo nublai/pi-herdr-factorio-layout-fixture --vm <disposable-name> "$C"
+```
+
+`GH_HOST=github.int.exe.xyz gh api -H 'Accept: application/vnd.github.raw' "repos/nublai/pi-herdr-factorio-layout-fixture/contents/host/install/install-exe-dev.sh?ref=$C" > "$F"` is equivalent on the VM. Stop if `sha256sum -c` fails. An old-layout fixture revision keeps its installer at `server/install-exe-dev.sh`, so use that path in both the hash and the fetch when installing the old layout on the upgrade VM.
 
 Use a clean new-layout VM for fresh installation and a separate old-layout VM for upgrade. Keep the hold. Do not attach the production repository integration to either VM. Fixture installation is not production deployment proof.
 

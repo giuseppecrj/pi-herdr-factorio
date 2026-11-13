@@ -207,7 +207,8 @@ Rows outside the exact requested repository are counted separately under
 A casing mismatch is not silently treated as an empty history.
 
 The one exception is the platform's read-only historical repository alias
-([platform profile](platform.md#historical-repository-alias)). A frozen row
+([platform profiles](platform.md#historical-repository-alias), defined as `historicalRepositories`
+in `src/trust/platform.ts`). A frozen row
 recorded under a former name of the requested repository counts as that
 repository's, because the repository moved and the row cannot be rewritten.
 By default `--repo nublai/pi-herdr-factorio` also counts rows recorded as

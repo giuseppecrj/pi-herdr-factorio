@@ -1,6 +1,6 @@
 # Human handoff and bounded refresh (F09a)
 
-Use this recipe for the ten F09a live lanes in the [plan](../../../../docs/plans/factory-v1.md#hand-off-verified-prs-and-require-human-merge-f09a). It is a source-backed recipe, not a live result. Follow [the owner guide](../../../../docs/operations/human-review.md) for decisions and conditional protection setup.
+Use this recipe for the ten F09a live lanes in the [plan](../../../../docs/plans/active/factory-v1.md#hand-off-verified-prs-and-require-human-merge-f09a). It is a source-backed recipe, not a live result. Follow [the owner guide](../../../../docs/operations/human-review.md) for decisions and conditional protection setup.
 
 ## Sub-features
 

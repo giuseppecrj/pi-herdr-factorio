@@ -16,7 +16,7 @@ Two host-owned sources select the platform. `WORKFLOW.md` never does, because a 
   "controllerLogin": "<app-slug>[bot]",
   "controllerAppSlug": "<app-slug>",
   "botEmail": "<id>+<app-slug>[bot]@users.noreply.github.com",
-  "repositories": ["giuseppecrj/pi-herdr-factorio"],
+  "repositories": ["nublai/pi-herdr-factorio"],
   "ghHost": "<label>.int.exmach.net"
 }
 ```
@@ -55,8 +55,12 @@ Every entry point uses the same resolver, `resolvePlatform`, with the environmen
 | `controllerAppSlug` | `exe-dev-github-integration` | `nubl-agent`, or the file's identity |
 | `botEmail` | `267204973+exe-dev-github-integration[bot]@users.noreply.github.com` | `353429311+nubl-agent[bot]@users.noreply.github.com`, or the file's identity |
 | `ghHost` | `github.int.exe.xyz` | `factorio.int.<domain>`, or the file's one-label `ghHost` |
-| `repositories` | `giuseppecrj/pi-herdr-factorio` | the same, or the file's list |
+| `repositories` | `nublai/pi-herdr-factorio` | the same, or the file's list |
 | `anthropicStages` | `accept`, `code-review` | `accept`, `code-review` |
+
+## Historical repository alias
+
+The repository moved from `giuseppecrj/pi-herdr-factorio` to `nublai/pi-herdr-factorio` on 2026-11-10. `historicalRepositories` in `src/trust/platform.ts` maps the current slug to its earlier names, so ledger, metrics and replay can read markers and rows written before the move. The alias is read-only: the controller never writes under an old name.
 
 The `exmach` identity is the published `nubl-agent` GitHub App (app id 5645247, user id 353429311), from giuseppecrj/exmach#94. Its default `ghHost` is the dedicated `factorio` integration, the only one that will carry `actions`. That host is provisional until exmach's E1 and E2 land.
 
@@ -89,7 +93,7 @@ After changing either selection source, rerun full provisioning before restartin
 
 ## Remaining exe-dev literals
 
-Run the full inventory with `rg -n 'exe\.xyz|exe-dev-github-integration|169\.254\.169\.254|giuseppecrj/pi-herdr-factorio' server src extension`.
+Run the full inventory with `rg -n 'exe\.xyz|exe-dev-github-integration|169\.254\.169\.254|nublai/pi-herdr-factorio' host src extension`.
 
 - `src/trust/platform.ts` holds the built-in exe-dev network, identity and repository defaults. Its `exe-dev-integration` placeholder is deliberately retained for host Pi, not used as a GitHub token.
 - `host/gateway/echo-fixture.ts` holds a redirect target for a test, not a platform value.

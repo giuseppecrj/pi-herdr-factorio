@@ -1,6 +1,6 @@
 # Path map
 
-Every file that the layout program in `docs/plans/codebase-layout.md` moves, renames or splits gets one row here, in the PR that moves it. Use this map to read a historical document, decision row or acceptance suite that names an old path.
+Every file that the layout program in `docs/plans/later/codebase-layout.md` moves, renames or splits gets one row here, in the PR that moves it. Use this map to read a historical document, decision row or acceptance suite that names an old path.
 
 Each row is bound to the pull request that made the move. Its squash commit on `main` is the revision: the old path is valid at that commit's parent, and the new path is valid at the commit itself. Branch commits are rewritten by rebases and squash merges, so rows never cite them. Write a line citation to an old path as `<sha>:path:line`, so the citation check validates its form instead of looking for the file at HEAD.
 
@@ -251,5 +251,145 @@ Each row is bound to the pull request that made the move. Its squash commit on `
 | L14 | #762 | `test/sandbox.test.ts` | `test/host/{sandbox,gateway}/*.test.ts` | Aggregator deleted; its eight suites are directly discovered, not re-exported |
 | L14 | #762 | `test/sandbox/routes.cases.ts` | `test/host/gateway/route-fixtures.ts` | `modelTable` and `anthropicTable`; shared fixtures register no tests |
 | L14 | #762 | `test/sandbox/credentials.cases.ts` | `test/host/gateway/credential-fixtures.ts` | `ECHO_SECRET`, `LINEAR_CEILING`, `credentialedRoute`, `id` and `routeIdOf`; shared fixtures register no tests |
+| L15 | #763 | `docs/design.md` | `docs/architecture.md` | The whole file, with its links to moved documents updated |
+| L15 | #763 | `docs/handoff.md` | `docs/history/handoff.md` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/plans/codebase-layout.md` | `docs/plans/later/codebase-layout.md` | The whole file, plus the completed-PR evidence, pending owner lanes and post-program owner checklist that close the program |
+| L15 | #763 | `docs/plans/exmach-move.md` | `docs/plans/later/exmach-move.md` | The whole file, with its plan paths updated |
+| L15 | #763 | `docs/plans/factorio-vm.md` | `docs/plans/later/factorio-vm.md` | The whole file, with its plan paths updated |
+| L15 | #763 | `docs/plans/factory-v1.md` | `docs/plans/active/factory-v1.md` | The whole file, with its links and current paths updated to the moved documents |
+| L15 | #763 | `docs/prototypes/acceptance-isolation/README.md` | `docs/history/prototypes/acceptance-isolation/README.md` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/acceptance-isolation/fix-1.md` | `docs/history/prototypes/acceptance-isolation/fix-1.md` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/anthropic-route/README.md` | `docs/history/prototypes/anthropic-route/README.md` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/anthropic-route/probe.ts` | `docs/history/prototypes/anthropic-route/probe.ts` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/anthropic-route/receipt.json` | `docs/history/prototypes/anthropic-route/receipt.json` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/build-isolation/README.md` | `docs/history/prototypes/build-isolation/README.md` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/github-polling/README.md` | `docs/history/prototypes/github-polling/README.md` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/github-polling/probe.sh` | `docs/history/prototypes/github-polling/probe.sh` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/heldout-ci/README.md` | `docs/history/prototypes/heldout-ci/README.md` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/heldout-ci/closure-proof.json` | `docs/history/prototypes/heldout-ci/closure-proof.json` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/heldout-ci/collect-probe.ts` | `docs/history/prototypes/heldout-ci/collect-probe.ts` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/heldout-ci/fix1-proof.json` | `docs/history/prototypes/heldout-ci/fix1-proof.json` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/heldout-ci/proof.json` | `docs/history/prototypes/heldout-ci/proof.json` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/herdr-on-runner.md` | `docs/history/prototypes/herdr-on-runner.md` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/ledger-branch/probe.ts` | `docs/history/prototypes/ledger-branch/probe.ts` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/restart-recovery/README.md` | `docs/history/prototypes/restart-recovery/README.md` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/restart-recovery/probe.sh` | `docs/history/prototypes/restart-recovery/probe.sh` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/trusted-ci/README.md` | `docs/history/prototypes/trusted-ci/README.md` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/trusted-ci/collect.mjs` | `docs/history/prototypes/trusted-ci/collect.mjs` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/trusted-ci/delta-proof.json` | `docs/history/prototypes/trusted-ci/delta-proof.json` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/trusted-ci/fix1-perf.json` | `docs/history/prototypes/trusted-ci/fix1-perf.json` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/trusted-ci/fix1-proof.json` | `docs/history/prototypes/trusted-ci/fix1-proof.json` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/trusted-ci/fix2-proof.json` | `docs/history/prototypes/trusted-ci/fix2-proof.json` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/trusted-ci/fix3-proof.json` | `docs/history/prototypes/trusted-ci/fix3-proof.json` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/trusted-ci/fixtures.mjs` | `docs/history/prototypes/trusted-ci/fixtures.mjs` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/trusted-ci/perf.json` | `docs/history/prototypes/trusted-ci/perf.json` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/trusted-ci/proof.json` | `docs/history/prototypes/trusted-ci/proof.json` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/README.md` | `docs/history/prototypes/vm-sandbox/README.md` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/r1/exp1-edge-routing.log` | `docs/history/prototypes/vm-sandbox/r1/exp1-edge-routing.log` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/r1/exp1-table.txt` | `docs/history/prototypes/vm-sandbox/r1/exp1-table.txt` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/r1/exp1_curl.sh` | `docs/history/prototypes/vm-sandbox/r1/exp1_curl.sh` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/r1/exp1_h2.mjs` | `docs/history/prototypes/vm-sandbox/r1/exp1_h2.mjs` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/r1/exp1_probe.py` | `docs/history/prototypes/vm-sandbox/r1/exp1_probe.py` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/r1/exp1_table.py` | `docs/history/prototypes/vm-sandbox/r1/exp1_table.py` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/r1/exp2-netns-bypass.log` | `docs/history/prototypes/vm-sandbox/r1/exp2-netns-bypass.log` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/r1/exp2_inside.sh` | `docs/history/prototypes/vm-sandbox/r1/exp2_inside.sh` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/r1/exp3-gateway.log` | `docs/history/prototypes/vm-sandbox/r1/exp3-gateway.log` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/r1/exp3-gateway.run1-harness-bugs.log` | `docs/history/prototypes/vm-sandbox/r1/exp3-gateway.run1-harness-bugs.log` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/r1/exp3-gateway.run2-socket-race.log` | `docs/history/prototypes/vm-sandbox/r1/exp3-gateway.run2-socket-race.log` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/r1/exp3_inside.sh` | `docs/history/prototypes/vm-sandbox/r1/exp3_inside.sh` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/r1/exp3b-completion.attempt1-input-shape.log` | `docs/history/prototypes/vm-sandbox/r1/exp3b-completion.attempt1-input-shape.log` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/r1/exp3b-completion.attempt2-stream-required.log` | `docs/history/prototypes/vm-sandbox/r1/exp3b-completion.attempt2-stream-required.log` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/r1/exp3b-completion.log` | `docs/history/prototypes/vm-sandbox/r1/exp3b-completion.log` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/r1/exp3b_inside.sh` | `docs/history/prototypes/vm-sandbox/r1/exp3b_inside.sh` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/r1/fixture.py` | `docs/history/prototypes/vm-sandbox/r1/fixture.py` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/r1/gateway.py` | `docs/history/prototypes/vm-sandbox/r1/gateway.py` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/r1/run_exp1.sh` | `docs/history/prototypes/vm-sandbox/r1/run_exp1.sh` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/r1/run_exp2.sh` | `docs/history/prototypes/vm-sandbox/r1/run_exp2.sh` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/r1/run_exp3.sh` | `docs/history/prototypes/vm-sandbox/r1/run_exp3.sh` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/r1/ship.sh` | `docs/history/prototypes/vm-sandbox/r1/ship.sh` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/r1/summary.md` | `docs/history/prototypes/vm-sandbox/r1/summary.md` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/r1/vm-cleanup.log` | `docs/history/prototypes/vm-sandbox/r1/vm-cleanup.log` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/common.sh` | `docs/history/prototypes/vm-sandbox/runtime/common.sh` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/exp10-mount-denial.attempt1-bwrap-environ.log` | `docs/history/prototypes/vm-sandbox/runtime/exp10-mount-denial.attempt1-bwrap-environ.log` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/exp10-mount-denial.log` | `docs/history/prototypes/vm-sandbox/runtime/exp10-mount-denial.log` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/exp10_inside.sh` | `docs/history/prototypes/vm-sandbox/runtime/exp10_inside.sh` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/exp4-pi-rpc.attempt1-ro-agent-dir.log` | `docs/history/prototypes/vm-sandbox/runtime/exp4-pi-rpc.attempt1-ro-agent-dir.log` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/exp4-pi-rpc.log` | `docs/history/prototypes/vm-sandbox/runtime/exp4-pi-rpc.log` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/exp5-herdr-fanout.log` | `docs/history/prototypes/vm-sandbox/runtime/exp5-herdr-fanout.log` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/exp5_inside.sh` | `docs/history/prototypes/vm-sandbox/runtime/exp5_inside.sh` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/exp5_parent.py` | `docs/history/prototypes/vm-sandbox/runtime/exp5_parent.py` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/exp6-limits-cleanup.attempt1-harness-hang.log` | `docs/history/prototypes/vm-sandbox/runtime/exp6-limits-cleanup.attempt1-harness-hang.log` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/exp6-limits-cleanup.log` | `docs/history/prototypes/vm-sandbox/runtime/exp6-limits-cleanup.log` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/exp7-budget-gate.log` | `docs/history/prototypes/vm-sandbox/runtime/exp7-budget-gate.log` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/exp8-refusal-surface.attempt1-ro-agent-dir.log` | `docs/history/prototypes/vm-sandbox/runtime/exp8-refusal-surface.attempt1-ro-agent-dir.log` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/exp8-refusal-surface.attempt2-fake-route-bug-REAL-TOKENS.log` | `docs/history/prototypes/vm-sandbox/runtime/exp8-refusal-surface.attempt2-fake-route-bug-REAL-TOKENS.log` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/exp8-refusal-surface.log` | `docs/history/prototypes/vm-sandbox/runtime/exp8-refusal-surface.log` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/exp9-npm-gateway.log` | `docs/history/prototypes/vm-sandbox/runtime/exp9-npm-gateway.log` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/exp9_inside.sh` | `docs/history/prototypes/vm-sandbox/runtime/exp9_inside.sh` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/fakeup.py` | `docs/history/prototypes/vm-sandbox/runtime/fakeup.py` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/gateway.py` | `docs/history/prototypes/vm-sandbox/runtime/gateway.py` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/gwsummary.py` | `docs/history/prototypes/vm-sandbox/runtime/gwsummary.py` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp4-gw.jsonl` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp4-gw.jsonl` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp4-npm.events.jsonl` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp4-npm.events.jsonl` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp4-npm.stderr` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp4-npm.stderr` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp4-standalone.events.jsonl` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp4-standalone.events.jsonl` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp4-standalone.stderr` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp4-standalone.stderr` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp5-gw.jsonl` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp5-gw.jsonl` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp5-parent-events.jsonl` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp5-parent-events.jsonl` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp7-a-gw.jsonl` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp7-a-gw.jsonl` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp7-a.events.jsonl` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp7-a.events.jsonl` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp7-a.stderr` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp7-a.stderr` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp7-b-gw.jsonl` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp7-b-gw.jsonl` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp7-b.events.jsonl` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp7-b.events.jsonl` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp7-b.stderr` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp7-b.stderr` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp8-failed_content_filter.events.jsonl` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp8-failed_content_filter.events.jsonl` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp8-failed_content_filter.stderr` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp8-failed_content_filter.stderr` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp8-failed_content_filter.summary.json` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp8-failed_content_filter.summary.json` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp8-gw.jsonl` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp8-gw.jsonl` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp8-http400_content_policy.events.jsonl` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp8-http400_content_policy.events.jsonl` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp8-http400_content_policy.stderr` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp8-http400_content_policy.stderr` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp8-http400_content_policy.summary.json` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp8-http400_content_policy.summary.json` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp8-http500.events.jsonl` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp8-http500.events.jsonl` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp8-http500.stderr` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp8-http500.stderr` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp8-http500.summary.json` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp8-http500.summary.json` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp8-incomplete_content_filter.events.jsonl` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp8-incomplete_content_filter.events.jsonl` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp8-incomplete_content_filter.stderr` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp8-incomplete_content_filter.stderr` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp8-incomplete_content_filter.summary.json` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp8-incomplete_content_filter.summary.json` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp8-refusal_part.events.jsonl` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp8-refusal_part.events.jsonl` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp8-refusal_part.stderr` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp8-refusal_part.stderr` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp8-refusal_part.summary.json` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp8-refusal_part.summary.json` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/raw/exp9-gw.jsonl` | `docs/history/prototypes/vm-sandbox/runtime/raw/exp9-gw.jsonl` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/rpcdrive.py` | `docs/history/prototypes/vm-sandbox/runtime/rpcdrive.py` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/run_exp10.sh` | `docs/history/prototypes/vm-sandbox/runtime/run_exp10.sh` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/run_exp4.sh` | `docs/history/prototypes/vm-sandbox/runtime/run_exp4.sh` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/run_exp5.sh` | `docs/history/prototypes/vm-sandbox/runtime/run_exp5.sh` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/run_exp6.sh` | `docs/history/prototypes/vm-sandbox/runtime/run_exp6.sh` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/run_exp7.sh` | `docs/history/prototypes/vm-sandbox/runtime/run_exp7.sh` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/run_exp8.sh` | `docs/history/prototypes/vm-sandbox/runtime/run_exp8.sh` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/run_exp9.sh` | `docs/history/prototypes/vm-sandbox/runtime/run_exp9.sh` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/sbx-entry.sh` | `docs/history/prototypes/vm-sandbox/runtime/sbx-entry.sh` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/setup.log` | `docs/history/prototypes/vm-sandbox/runtime/setup.log` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/setup.sh` | `docs/history/prototypes/vm-sandbox/runtime/setup.sh` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/ship.sh` | `docs/history/prototypes/vm-sandbox/runtime/ship.sh` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/summary.md` | `docs/history/prototypes/vm-sandbox/runtime/summary.md` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/vm-cleanup.log` | `docs/history/prototypes/vm-sandbox/runtime/vm-cleanup.log` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/prototypes/vm-sandbox/runtime/vm_cleanup.sh` | `docs/history/prototypes/vm-sandbox/runtime/vm_cleanup.sh` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/statecharts/README.md` | `docs/models/README.md` | The whole file, with its commands updated to `docs/models` |
+| L15 | #763 | `docs/statecharts/controller/Chart.cfg` | `docs/models/controller/Chart.cfg` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/statecharts/controller/Controller.cfg` | `docs/models/controller/Controller.cfg` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/statecharts/controller/Controller.tla` | `docs/models/controller/Controller.tla` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/statecharts/controller/chart.mmd` | `docs/models/controller/chart.mmd` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/statecharts/controller/view.ts` | `docs/models/controller/view.ts` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/statecharts/journey/Chart.cfg` | `docs/models/journey/Chart.cfg` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/statecharts/journey/Feedback.cfg` | `docs/models/journey/Feedback.cfg` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/statecharts/journey/Journey.cfg` | `docs/models/journey/Journey.cfg` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/statecharts/journey/Journey.tla` | `docs/models/journey/Journey.tla` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/statecharts/journey/MergeMidRepairWitness.cfg` | `docs/models/journey/MergeMidRepairWitness.cfg` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/statecharts/journey/OwnerAuthoredMergeWitness.cfg` | `docs/models/journey/OwnerAuthoredMergeWitness.cfg` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/statecharts/journey/OwnerReadyWitness.cfg` | `docs/models/journey/OwnerReadyWitness.cfg` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/statecharts/journey/PublishedRepairWitness.cfg` | `docs/models/journey/PublishedRepairWitness.cfg` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/statecharts/journey/chart.mmd` | `docs/models/journey/chart.mmd` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/statecharts/journey/replay-merge-mid-repair.ts` | `docs/models/journey/replay-merge-mid-repair.ts` | The whole file, bytes unchanged |
+| L15 | #763 | `docs/statecharts/journey/view.ts` | `docs/models/journey/view.ts` | The whole file, bytes unchanged |
 
 L00 moves no files.

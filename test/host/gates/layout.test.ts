@@ -870,8 +870,8 @@ describe("layout guard", () => {
 			edit(
 				root,
 				"tsconfig.json",
-				'"docs/statecharts"]',
-				'"docs/statecharts", "tests/**/*.ts"]',
+				'"docs/models"]',
+				'"docs/models", "tests/**/*.ts"]',
 			);
 
 			includesMatch(
@@ -1206,7 +1206,7 @@ describe("layout guard", () => {
 			);
 
 			appendFileSync(
-				join(root, "docs/handoff.md"),
+				join(root, "docs/history/handoff.md"),
 				"See `src/missing.ts:3`.\n",
 			);
 			edit(
