@@ -89,17 +89,23 @@ function probeNoRoute(socketPath: string, host: string): Promise<boolean> {
 	});
 }
 
-class ProcessHandle implements GatewayHandle {
+/** The parts of the gateway child a handle uses. */
+type GatewayChild = Pick<
+	ChildProcessByStdio<Writable, Readable, null>,
+	"stdin" | "stdout" | "exitCode" | "kill"
+> & {
+	on(event: "exit", listener: (code: number | null) => void): void;
+	on(event: "error", listener: (error: Error) => void): void;
+};
+
+export class ProcessHandle implements GatewayHandle {
 	readonly socketPath: string;
 	readonly exited: Promise<number | null>;
-	readonly #child: ChildProcessByStdio<Writable, Readable, null>;
+	readonly #child: GatewayChild;
 	readonly #listeners: ((event: ControlEvent) => void)[] = [];
 	#bad = false;
 
-	constructor(
-		child: ChildProcessByStdio<Writable, Readable, null>,
-		socketPath: string,
-	) {
+	constructor(child: GatewayChild, socketPath: string) {
 		this.#child = child;
 		this.socketPath = socketPath;
 		this.exited = new Promise((done) => {
@@ -124,6 +130,10 @@ class ProcessHandle implements GatewayHandle {
 
 				for (const listener of this.#listeners.slice()) listener(event);
 			}
+		});
+		child.stdout.on("error", () => {
+			this.#bad = true;
+			this.kill();
 		});
 		child.stdin.on("error", () => {});
 	}

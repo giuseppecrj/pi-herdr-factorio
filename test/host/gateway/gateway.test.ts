@@ -1,17 +1,21 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import {
 	assertNoStrays,
 	closeHttpServer,
 	startEchoFixture,
 } from "./http-fixtures.ts";
 import {
+	chmodSync,
 	lstatSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { createServer, request } from "node:http";
@@ -26,7 +30,10 @@ import {
 	type JournalRecord,
 } from "../../../host/gateway/audit.ts";
 import { journalCharge } from "../../../src/core/journal.ts";
-import { startGatewayProcess } from "../../../host/gateway/client.ts";
+import {
+	ProcessHandle,
+	startGatewayProcess,
+} from "../../../host/gateway/client.ts";
 import { executionCharge } from "../../../host/sandbox/receipts.ts";
 import {
 	type ControlEvent,
@@ -52,6 +59,7 @@ import {
 } from "../../../host/gateway/gateway.ts";
 import { DENY_CODES, denyBody } from "../../../host/gateway/policy.ts";
 import {
+	type CredentialPlacement,
 	type Route,
 	type RouteId,
 	type RouteTable,
@@ -383,6 +391,20 @@ describe("upstream address checks", () => {
 		]) {
 			assert.equal(addressAllowed(address, refused), false, address);
 		}
+	});
+
+	it("refuses the metadata address in the NAT64 local-use prefix 64:ff9b:1::/48", () => {
+		const refused = refusedAddresses();
+
+		for (const address of [
+			"64:ff9b:1::a9fe:a9fe",
+			"64:ff9b:1::169.254.169.254",
+			"64:ff9b:1:a9fe:a9:fe00::",
+		]) {
+			assert.equal(addressAllowed(address, refused), false, address);
+		}
+
+		assert.equal(addressAllowed("2606:4700::6810:b22", refused), true);
 	});
 
 	it("refuses the metadata address and every refused IPv4 range in their 6to4, IPv4-compatible and IPv4-mapped spellings", () => {
@@ -966,6 +988,45 @@ describe("gateway credential engine against the echo fixture", () => {
 		assert.equal(h.audit.at(-1)?.credential, "echo-read");
 	});
 
+	it("sends the route's Host upstream, never the client's, even when the route lists host", async () => {
+		const base = testTable(fixture.port, { host: fixture.host });
+
+		const table: RouteTable = {
+			...base,
+			routes: base.routes.map((route) =>
+				route.id === "echo-read"
+					? { ...route, requestHeaders: [...route.requestHeaders, "host"] }
+					: route,
+			),
+		};
+
+		const gateway = new Gateway({
+			table,
+			credentials: binding(table),
+			audit: new AuditLog(() => {}, 1_000_000, {
+				write: () => {},
+				sync: () => {},
+			}),
+			emit: () => {},
+			lookup: async () => [],
+		});
+
+		const socketPath = join(dir, "gw-host.sock");
+
+		await gateway.listen(socketPath);
+
+		try {
+			const foreign = fixture.foreign.length;
+			const reply = await call(socketPath, "GET", "/echo/api/echo");
+
+			assert.equal(reply.status, 200);
+			assert.equal(fixture.received.at(-1)?.host, fixture.host);
+			assert.equal(fixture.foreign.length, foreign);
+		} finally {
+			await gateway.close();
+		}
+	});
+
 	it("scrubs auth and cookie headers from the response", async () => {
 		const reply = await call(h.socketPath, "GET", "/echo/api/cookie");
 
@@ -1045,6 +1106,21 @@ describe("gateway credential engine against the echo fixture", () => {
 		);
 	});
 
+	it("refuses raw deflate, unframed brotli and gzip after a prefix served as text or JSON", async () => {
+		for (const path of [
+			"/echo/api/reflect-deflate-raw-text",
+			"/echo/api/reflect-brotli-json",
+			"/echo/api/reflect-gzip-prefixed-text",
+		]) {
+			const reply = await call(h.socketPath, "GET", path);
+
+			assert.equal(reply.status, 403, path);
+			assert.equal(reply.code, "response-blocked", path);
+			assert.equal(reply.body, denyBody("response-blocked"), path);
+			assert.equal(h.audit.at(-1)?.reason, "response-blocked", path);
+		}
+	});
+
 	it("logs a template, not the path, when a secret is split by a slash or an encoded slash", async () => {
 		const lines = h.audit.length;
 
@@ -1062,6 +1138,57 @@ describe("gateway credential engine against the echo fixture", () => {
 		}
 
 		assert.equal(h.audit.length, lines + 2);
+	});
+
+	it("refuses a reflection as mixed-case hex or as base64 split by '*' or form feeds", async () => {
+		for (const path of [
+			"/echo/api/reflect-hex-mixed",
+			"/echo/api/reflect-base64-star",
+			"/echo/api/reflect-base64-form-feed",
+		]) {
+			const reply = await call(h.socketPath, "GET", path);
+
+			assert.equal(reply.status, 403, path);
+			assert.equal(reply.code, "response-blocked", path);
+			assert.equal(h.audit.at(-1)?.reason, "response-blocked", path);
+		}
+	});
+
+	it("keeps neither half of a secret split by a five-deep encoded slash", async () => {
+		const head = ECHO_SECRET.slice(0, 16);
+		const tail = ECHO_SECRET.slice(16);
+
+		for (const separator of ["%252f", "%252525252f"]) {
+			const path = `/plain/api/${head}${separator}${tail}`;
+
+			await call(h.socketPath, "GET", path);
+
+			const logged = h.audit.at(-1)?.path ?? "";
+
+			assert.equal(logged.includes(head), false, logged);
+			assert.equal(logged.includes(tail), false, logged);
+		}
+	});
+
+	it("keeps neither half of a secret split by %3f or %2e, admitted or denied as ambiguous", async () => {
+		const head = ECHO_SECRET.slice(0, 16);
+		const tail = ECHO_SECRET.slice(16);
+
+		for (const [path, decision] of [
+			[`/plain/api/${head}%3f${tail}`, "forward"],
+			[`/plain/api/${head}%2e${tail}`, "forward"],
+			[`/plain/api/${head}/../${tail}`, "deny"],
+			[`/plain/api/${head}%252e${tail}`, "deny"],
+		] as const) {
+			await call(h.socketPath, "GET", path);
+
+			const line = h.audit.at(-1);
+			const logged = line?.path ?? "";
+
+			assert.equal(line?.decision, decision, path);
+			assert.equal(logged.includes(head), false, logged);
+			assert.equal(logged.includes(tail), false, logged);
+		}
 	});
 
 	it("fails closed on an encoded reflection the sandbox could still decode", async () => {
@@ -2522,6 +2649,29 @@ describe("gateway process request journal", () => {
 });
 
 describe("gateway process and control pipe", () => {
+	it("marks the gateway bad and kills it when its stdout fails, without an uncaught error", async () => {
+		const signals: string[] = [];
+
+		const fake = Object.assign(new EventEmitter(), {
+			stdin: new PassThrough(),
+			stdout: new PassThrough(),
+			exitCode: null,
+			kill: (signal?: NodeJS.Signals | number) => {
+				signals.push(String(signal));
+
+				return true;
+			},
+		});
+
+		const handle = new ProcessHandle(fake, "/nonexistent/gw.sock");
+
+		fake.stdout.destroy(new Error("EIO"));
+		await new Promise((done) => setImmediate(done));
+
+		assert.equal(handle.bad, true);
+		assert.deepEqual(signals, ["SIGKILL"]);
+	});
+
 	it("starts from a table on stdin, reports ready, and exits when the control pipe closes", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "factory-gw-main-"));
 		const socketPath = join(dir, "gw.sock");
@@ -2645,15 +2795,63 @@ describe("gateway process and control pipe", () => {
 
 	for (const name of ["host", ":authority"]) {
 		it(`exits bad-credentials when a table and ceiling place their secret in ${name}`, async () => {
-			await placedIn(name);
+			const first = await mainWithCeiling(
+				{ kind: "header", name, scheme: null },
+				(path, text) => writeFileSync(path, text, { mode: 0o644 }),
+			);
+
+			assert.deepEqual(first, {
+				exit: 2,
+				event: { event: "fatal", code: "bad-credentials" },
+			});
 		});
 	}
 
-	async function placedIn(name: string): Promise<void> {
+	it("starts on a regular ceiling file and exits bad-credentials on a symlinked or writable one", async () => {
+		const placement = {
+			kind: "header",
+			name: "Authorization",
+			scheme: "Bearer",
+		} as const;
+
+		const ready = await mainWithCeiling(placement, (path, text) =>
+			writeFileSync(path, text, { mode: 0o644 }),
+		);
+
+		assert.equal(ready.exit, 0);
+		assert.equal(ready.event?.event, "ready");
+
+		for (const [label, write] of [
+			[
+				"symlink",
+				(path: string, text: string) => {
+					writeFileSync(`${path}.target`, text, { mode: 0o644 });
+					symlinkSync(`${path}.target`, path);
+				},
+			],
+			[
+				"group-writable",
+				(path: string, text: string) => {
+					writeFileSync(path, text);
+					chmodSync(path, 0o664);
+				},
+			],
+		] as const) {
+			assert.deepEqual(
+				await mainWithCeiling(placement, write),
+				{ exit: 2, event: { event: "fatal", code: "bad-credentials" } },
+				label,
+			);
+		}
+	});
+
+	async function mainWithCeiling(
+		placement: CredentialPlacement,
+		writeCeiling: (path: string, text: string) => void,
+	): Promise<{ exit: number | null; event: ControlEvent | null }> {
 		const dir = mkdtempSync(join(tmpdir(), "factory-gw-main-"));
 
 		try {
-			const placement = { kind: "header", name, scheme: null } as const;
 			const route = credentialedRoute(18_081);
 
 			const table: RouteTable = {
@@ -2671,7 +2869,7 @@ describe("gateway process and control pipe", () => {
 
 			mkdirSync(join(dir, "creds"));
 			writeFileSync(join(dir, "creds", "echo-read"), "github.int.exe.xyz");
-			writeFileSync(
+			writeCeiling(
 				join(dir, "ceilings.json"),
 				LINEAR_CEILING.replace("443", "18081").replace(
 					'{"kind":"header","name":"Authorization","scheme":"Bearer"}',
@@ -2710,11 +2908,10 @@ describe("gateway process and control pipe", () => {
 			);
 
 			child.stdin.end(`${JSON.stringify(table)}\n`);
-			assert.equal(await exited, 2);
-			assert.deepEqual(parseEvent(out.trim().split("\n")[0] ?? ""), {
-				event: "fatal",
-				code: "bad-credentials",
-			});
+
+			const exit = await exited;
+
+			return { exit, event: parseEvent(out.trim().split("\n")[0] ?? "") };
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

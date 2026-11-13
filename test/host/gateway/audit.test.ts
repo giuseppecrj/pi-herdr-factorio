@@ -352,6 +352,62 @@ describe("gateway audit", () => {
 		assert.equal(redactPath("/plain/api/x", reveals), "/plain/api/x");
 	});
 
+	it("redacts a secret split by an encoded query mark, an encoded dot, a dot segment or a fragment", () => {
+		const secret = "fixture:secret-7Hq2-not-real";
+		const [head, tail] = [secret.slice(0, 14), secret.slice(14)];
+
+		const scanner = new SecretScanner(
+			secretForms(Buffer.from(secret), {
+				kind: "header",
+				name: "Authorization",
+				scheme: "Bearer",
+			}),
+		);
+
+		const reveals = (text: string) => scanner.reveals(text);
+
+		for (const path of [
+			`/npm/${head}%3f${tail}`,
+			`/npm/${head}%3F${tail}`,
+			`/npm/${head}%2e${tail}`,
+			`/npm/${head}%2E%2E${tail}`,
+			`/npm/${head}/../${tail}`,
+			`/npm/${head}%252e${tail}`,
+			`/npm/${head}#${tail}`,
+		]) {
+			assert.equal(redactPath(path, reveals), "[redacted]", path);
+		}
+
+		assert.equal(
+			redactPath("/npm/@types%2fnode/-/node-1.0.0.tgz", reveals),
+			"/npm/_types%2fnode/-/node-1.0.0.tgz",
+		);
+	});
+
+	it("redacts a path that still holds an escape after four decode rounds", () => {
+		const secret = "fixture-secret-7Hq2-not-real";
+		const [head, tail] = [secret.slice(0, 14), secret.slice(14)];
+
+		const scanner = new SecretScanner(
+			secretForms(Buffer.from(secret), {
+				kind: "header",
+				name: "Authorization",
+				scheme: "Bearer",
+			}),
+		);
+
+		const reveals = (text: string) => scanner.reveals(text);
+
+		for (const separator of ["%2525252f", "%252525252f", "%25252525252e"]) {
+			const path = `/npm/${head}${separator}${tail}`;
+
+			assert.equal(redactPath(path, reveals), "[redacted]", path);
+		}
+
+		assert.equal(redactPath("/npm/%2525252541"), "[redacted]");
+		assert.equal(redactPath("/npm/%25252541"), "/npm/%25252541");
+	});
+
 	it("writes one JSON line per request with fixed fields and no secrets", () => {
 		const line = auditLine(record());
 

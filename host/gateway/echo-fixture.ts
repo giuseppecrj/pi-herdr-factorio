@@ -223,6 +223,60 @@ function respond(
 			);
 
 			return;
+		case "/api/reflect-hex-mixed": {
+			let letters = 0;
+
+			res.writeHead(200, { "Content-Type": "text/plain" });
+			res.end(
+				Buffer.from(secret)
+					.toString("hex")
+					.replace(/[a-f]/g, (letter) => {
+						letters += 1;
+
+						return letters % 2 === 0 ? letter.toUpperCase() : letter;
+					}),
+			);
+
+			return;
+		}
+
+		case "/api/reflect-base64-star":
+			res.writeHead(200, { "Content-Type": "text/plain" });
+			res.end([...Buffer.from(`leak ${secret}`).toString("base64")].join("*"));
+
+			return;
+		case "/api/reflect-base64-form-feed":
+			res.writeHead(200, { "Content-Type": "text/plain" });
+			res.end(
+				(
+					Buffer.from(`leak ${secret}`)
+						.toString("base64")
+						.match(/.{1,4}/g) ?? []
+				).join("\f"),
+			);
+
+			return;
+		case "/api/reflect-deflate-raw-text":
+			res.writeHead(200, { "Content-Type": "text/plain" });
+			res.end(deflateRawSync(Buffer.from(`leak ${secret}`)));
+
+			return;
+		case "/api/reflect-brotli-json":
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(
+				brotliCompressSync(
+					Buffer.from(`${"A".repeat(64)}${secret}${"B".repeat(64)}`),
+				),
+			);
+
+			return;
+		case "/api/reflect-gzip-prefixed-text":
+			res.writeHead(200, { "Content-Type": "text/plain" });
+			res.end(
+				Buffer.concat([Buffer.from("xxxx"), gzipSync(Buffer.from(secret))]),
+			);
+
+			return;
 		case "/api/untyped":
 			res.writeHead(200);
 			res.end("ok");

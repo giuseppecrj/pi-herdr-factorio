@@ -12,6 +12,8 @@ import {
 import {
 	type PlatformNetwork,
 	platformDefect,
+	readTrustedFile,
+	rootOrSelf,
 } from "../../src/trust/platform.ts";
 import {
 	type CredentialId,
@@ -44,7 +46,11 @@ export type Ceilings = ReadonlyMap<CredentialId, Ceiling>;
 
 export const CEILINGS_PATH = "/etc/factory/egress-credentials.json";
 
+const MIN_SECRET_BYTES = 16;
+
 const MAX_SECRET_BYTES = 8192;
+
+const MAX_CEILINGS_BYTES = 64 * 1024;
 
 const CEILING_KEYS = [
 	"scheme",
@@ -56,13 +62,14 @@ const CEILING_KEYS = [
 ] as const;
 
 const FRAMING_HEADER =
-	/^(host|:.*|content-length|transfer-encoding|connection|te|trailer|keep-alive)$/;
+	/^(host|:.*|content-length|transfer-encoding|connection|te|trailer|keep-alive|user-agent|accept-encoding)$/;
 
 /**
  * True when a placement would put the secret in a header that routes or
- * frames the request: a framing header, any pseudo-header, or a header the
- * client filter refuses as retargeting. Node keeps the last of two `Host`
- * values, so a credential named `host` would replace the route's own.
+ * frames the request: a framing header, a header the gateway sets itself,
+ * any pseudo-header, or a header the client filter refuses as retargeting.
+ * Node keeps the last of two `Host` values, so a credential named `host`
+ * would replace the route's own.
  */
 function reservedPlacement(placement: CredentialPlacement): boolean {
 	if (placement.kind !== "header") return false;
@@ -137,16 +144,25 @@ export function parseCeilings(
 	return { ok: true, ceilings };
 }
 
+/**
+ * Reads the ceiling file through `readTrustedFile`. Production trusts only a
+ * root-owned file, because the controller names the path; test mode also
+ * trusts the gateway's own user.
+ */
 export function loadCeilings(
 	path: string,
 	mode: TableMode,
 	network: PlatformNetwork,
 ): CeilingParse {
-	try {
-		return parseCeilings(readFileSync(path, "utf8"), mode, network);
-	} catch {
-		return { ok: false };
-	}
+	const file = readTrustedFile(
+		path,
+		MAX_CEILINGS_BYTES,
+		mode === "production" ? [0] : rootOrSelf(),
+	);
+
+	return file.kind === "present"
+		? parseCeilings(file.text, mode, network)
+		: { ok: false };
 }
 
 export type SecretLoad =
@@ -155,7 +171,7 @@ export type SecretLoad =
 
 function validSecret(bytes: Buffer): boolean {
 	return (
-		bytes.length >= 1 &&
+		bytes.length >= MIN_SECRET_BYTES &&
 		bytes.length <= MAX_SECRET_BYTES &&
 		!bytes.includes(0x0a) &&
 		!bytes.includes(0x0d)
@@ -164,7 +180,7 @@ function validSecret(bytes: Buffer): boolean {
 
 /**
  * Reads each referenced secret once from systemd's credentials directory.
- * Any missing, empty, oversized or multi-line secret refuses the whole load.
+ * Any missing, short, oversized or multi-line secret refuses the whole load.
  */
 export function loadSecrets(
 	directory: string | undefined,
@@ -443,8 +459,9 @@ export const GATEWAY_USER_AGENT = "factory-gateway/1";
 
 /**
  * The upstream request headers, built from scratch: the route's Host, the
- * client headers the route lists minus every credential-family header, the
- * gateway's own headers, and the bound credential last.
+ * client headers the route lists minus every credential-family, framing or
+ * Host header, the gateway's own headers, and the bound credential last.
+ * The client's Host never goes upstream, whatever the route lists.
  */
 export function buildUpstreamHeaders(
 	route: Route,
@@ -463,7 +480,8 @@ export function buildUpstreamHeaders(
 			value !== undefined &&
 			route.requestHeaders.includes(name) &&
 			!isCredentialHeader(name) &&
-			!headers.some(([seen]) => seen === name)
+			!FRAMING_HEADER.test(name) &&
+			!headers.some(([seen]) => seen.toLowerCase() === name)
 		) {
 			headers.push([name, value]);
 		}
@@ -585,17 +603,44 @@ function withoutWhitespace(bytes: Buffer): Buffer {
 	);
 }
 
+/** The bytes with ASCII capitals lowered, so mixed-case hex reads as the lower-case form. */
+function lowerCased(bytes: Buffer): Buffer {
+	return Buffer.from(
+		bytes.map((byte) => (byte >= 0x41 && byte <= 0x5a ? byte + 0x20 : byte)),
+	);
+}
+
+function base64Byte(byte: number): boolean {
+	return (
+		(byte >= 0x30 && byte <= 0x39) ||
+		(byte >= 0x41 && byte <= 0x5a) ||
+		(byte >= 0x61 && byte <= 0x7a) ||
+		[0x2b, 0x2d, 0x2f, 0x3d, 0x5f].includes(byte)
+	);
+}
+
+/** The bytes outside the base64 and base64url alphabets removed, as Node's decoder skips them. */
+function base64Only(bytes: Buffer): Buffer {
+	return Buffer.from(bytes.filter(base64Byte));
+}
+
 /**
  * The views a secret is looked for in: raw, JSON-unescaped,
- * percent-decoded and whitespace-stripped. Hex and UTF-16 are forms of the
+ * percent-decoded, whitespace-stripped, lower-cased, both whitespace-stripped
+ * and lower-cased, and base64-alphabet only. Hex and UTF-16 are forms of the
  * secret, so the raw view finds them.
  */
 export function decodedViews(bytes: Buffer): Buffer[] {
+	const stripped = withoutWhitespace(bytes);
+
 	return [
 		bytes,
 		jsonUnescaped(bytes),
 		percentDecoded(bytes),
-		withoutWhitespace(bytes),
+		stripped,
+		lowerCased(bytes),
+		lowerCased(stripped),
+		base64Only(bytes),
 	];
 }
 
@@ -649,22 +694,15 @@ export type FilterStep =
 const MAGIC_PROBE_BYTES = 4;
 
 /**
- * True when a body starts like gzip, zlib, framed brotli or zstd data, which
- * the reflection scan cannot read whatever `Content-Encoding` says.
+ * True when a body starts like gzip, framed brotli or zstd data, which the
+ * reflection scan cannot read whatever `Content-Encoding` says. A zlib
+ * header can also be plain text such as `x^`, so the text check refuses
+ * zlib data instead.
  */
 function compressedMagic(head: Buffer): boolean {
 	const [first = -1, second = -1] = head;
 
 	if (first === 0x1f && second === 0x8b) return true;
-
-	if (
-		(first & 0x0f) === 8 &&
-		first >> 4 <= 7 &&
-		second !== -1 &&
-		((first << 8) | second) % 31 === 0
-	) {
-		return true;
-	}
 
 	return [
 		[0xce, 0xb2, 0xcf, 0x81],
@@ -676,22 +714,43 @@ function compressedMagic(head: Buffer): boolean {
 	);
 }
 
+function binaryByte(byte: number): boolean {
+	return (
+		(byte < 0x20 &&
+			byte !== 0x09 &&
+			byte !== 0x0a &&
+			byte !== 0x0c &&
+			byte !== 0x0d) ||
+		byte === 0x7f
+	);
+}
+
+/** A Unicode control character outside ASCII, U+0080 to U+009F. */
+const C1_CONTROL = /[\u0080-\u009f]/;
+
 /**
- * Streams a credentialed response body. Nothing passes until the first four
- * bytes show no compression magic. After that it holds back enough bytes
- * that a secret split across chunks, JSON-escaped, percent-encoded, hex,
- * UTF-16 or whitespace-wrapped base64, is found before any of its bytes
- * leave.
+ * Streams a credentialed response body. Every byte must be UTF-8 text with
+ * no control character, ASCII or C1, but tab, line feed, form feed and
+ * carriage return, because compressed data, framed or not and at any
+ * offset, is not text. Nothing passes until the first four bytes show no
+ * compression magic. After that it holds back enough bytes that a secret
+ * split across chunks, JSON-escaped, percent-encoded, hex in any case,
+ * UTF-16, or base64 split by bytes outside its alphabet, is found before
+ * any of its bytes leave. It also keeps the body's last base64-alphabet
+ * bytes across chunks, so base64 split by longer runs outside its alphabet
+ * still blocks the body before its last byte leaves.
  *
  * This scan is defense in depth and cannot be complete: an upstream can
- * always re-encode a secret in a way no scan reads, such as raw deflate.
- * The primary control is that a secret binds only to a trusted upstream
- * under the owner's ceiling, on a read-only route.
+ * always re-encode a secret as text no scan reads. The primary control is
+ * that a secret binds only to a trusted upstream under the owner's ceiling,
+ * on a read-only route.
  */
 export class ReflectionFilter {
 	readonly #scanner: SecretScanner;
 	readonly #hold: number;
+	readonly #utf8 = new TextDecoder("utf-8", { fatal: true });
 	#held: Buffer = Buffer.alloc(0);
+	#alphabet: Buffer = Buffer.alloc(0);
 	#probed = false;
 
 	constructor(forms: readonly Buffer[]) {
@@ -699,8 +758,30 @@ export class ReflectionFilter {
 		this.#hold = Math.max(MAGIC_PROBE_BYTES - 1, this.#scanner.longest * 6 - 1);
 	}
 
+	#text(chunk: Buffer, final: boolean): boolean {
+		if (chunk.some(binaryByte)) return false;
+
+		try {
+			return !C1_CONTROL.test(this.#utf8.decode(chunk, { stream: !final }));
+		} catch {
+			return false;
+		}
+	}
+
+	/** True when the body's base64-alphabet bytes so far, `unread` included, hold a secret. */
+	#alphabetReveals(unread: Buffer): boolean {
+		const alphabet = Buffer.concat([this.#alphabet, base64Only(unread)]);
+
+		this.#alphabet = alphabet.subarray(
+			Math.max(0, alphabet.length - this.#scanner.longest),
+		);
+
+		return this.#scanner.contains(alphabet);
+	}
+
 	push(chunk: Buffer): FilterStep {
 		const joined = Buffer.concat([this.#held, chunk]);
+		let unread = chunk;
 
 		if (!this.#probed) {
 			if (joined.length < MAGIC_PROBE_BYTES) {
@@ -712,9 +793,16 @@ export class ReflectionFilter {
 			if (compressedMagic(joined)) return { kind: "blocked" };
 
 			this.#probed = true;
+			unread = joined;
 		}
 
-		if (this.#scanner.reveals(joined)) return { kind: "blocked" };
+		if (
+			!this.#text(unread, false) ||
+			this.#scanner.reveals(joined) ||
+			this.#alphabetReveals(unread)
+		) {
+			return { kind: "blocked" };
+		}
 
 		const emit = Math.max(0, joined.length - this.#hold);
 
@@ -730,6 +818,7 @@ export class ReflectionFilter {
 
 		if (
 			(!this.#probed && compressedMagic(rest)) ||
+			!this.#text(this.#probed ? Buffer.alloc(0) : rest, true) ||
 			this.#scanner.reveals(rest)
 		) {
 			return { kind: "blocked" };

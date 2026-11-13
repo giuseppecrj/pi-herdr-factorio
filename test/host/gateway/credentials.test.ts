@@ -5,16 +5,28 @@ import {
 	id,
 } from "./credential-fixtures.ts";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	mkdtempSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { deflateSync, gzipSync } from "node:zlib";
+import {
+	brotliCompressSync,
+	deflateRawSync,
+	deflateSync,
+	gzipSync,
+} from "node:zlib";
 import {
 	bindCredentials,
 	buildUpstreamHeaders,
 	type Ceilings,
 	isCredentialHeader,
+	loadCeilings,
 	loadSecrets,
 	parseCeilings,
 	pathRuleWithin,
@@ -61,6 +73,42 @@ describe("credential ceilings", () => {
 			).ok,
 			false,
 		);
+	});
+
+	it("loads the ceiling file only when it is a regular, trusted, non-writable file", () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-ceilings-"));
+
+		try {
+			const path = join(dir, "egress-credentials.json");
+			const link = join(dir, "link.json");
+
+			writeFileSync(path, LINEAR_CEILING, { mode: 0o644 });
+			symlinkSync(path, link);
+			assert.equal(loadCeilings(path, "test", EXE_DEV_PLATFORM).ok, true);
+			assert.equal(loadCeilings(link, "test", EXE_DEV_PLATFORM).ok, false);
+			assert.equal(loadCeilings(dir, "test", EXE_DEV_PLATFORM).ok, false);
+
+			for (const mode of [0o664, 0o646]) {
+				chmodSync(path, mode);
+				assert.equal(
+					loadCeilings(path, "test", EXE_DEV_PLATFORM).ok,
+					false,
+					mode.toString(8),
+				);
+			}
+
+			const empty = join(dir, "empty.json");
+
+			writeFileSync(empty, "{}", { mode: 0o644 });
+			assert.equal(
+				loadCeilings(empty, "production", EXE_DEV_PLATFORM).ok,
+				process.geteuid?.() === 0,
+				"production trusts only a root-owned ceiling file",
+			);
+			assert.equal(loadCeilings(empty, "test", EXE_DEV_PLATFORM).ok, true);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("refuses a ceiling that places its secret in a routing or framing header", () => {
@@ -121,6 +169,29 @@ describe("credential ceilings", () => {
 			"x-rewrite-url",
 			"x-http-method-override",
 			"x-forwarded",
+		]) {
+			const text = LINEAR_CEILING.replace(
+				authorization,
+				JSON.stringify({ kind: "header", name, scheme: null }),
+			);
+
+			assert.equal(
+				parseCeilings(text, "test", EXE_DEV_PLATFORM).ok,
+				false,
+				name,
+			);
+		}
+	});
+
+	it("refuses a ceiling that places its secret in a method override or a header the gateway sets", () => {
+		const authorization =
+			'{"kind":"header","name":"Authorization","scheme":"Bearer"}';
+
+		for (const name of [
+			"x-method-override",
+			"X-HTTP-Method",
+			"accept-encoding",
+			"User-Agent",
 		]) {
 			const text = LINEAR_CEILING.replace(
 				authorization,
@@ -344,6 +415,23 @@ describe("credential secrets", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	it("refuses a secret shorter than 16 bytes", () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-creds-"));
+
+		try {
+			for (const [name, length] of [
+				["one", 1],
+				["fifteen", 15],
+				["sixteen", 16],
+			] as const) {
+				writeFileSync(join(dir, name), "k".repeat(length));
+				assert.equal(loadSecrets(dir, [id(name)]).ok, length >= 16, name);
+			}
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("credential header strip and inject", () => {
@@ -395,6 +483,21 @@ describe("credential header strip and inject", () => {
 			["Content-Length", "12"],
 			["Authorization", `Bearer ${ECHO_SECRET}`],
 		]);
+	});
+
+	it("never copies the client Host upstream, even when a route lists host", () => {
+		const headers = buildUpstreamHeaders(
+			credentialedRoute(443, { requestHeaders: ["accept", "host", "HOST"] }),
+			["Host", "127.0.0.1:18080", "host", "evil.test", "Accept", "text/plain"],
+			0,
+			null,
+		);
+
+		assert.deepEqual(
+			headers.filter(([name]) => name.toLowerCase() === "host"),
+			[["Host", "echo.test"]],
+		);
+		assert.deepEqual(headers[1], ["accept", "text/plain"]);
 	});
 
 	it("never copies auth or cookie headers back, even when a route lists them", () => {
@@ -530,6 +633,125 @@ describe("reflection scanning", () => {
 		assert.equal(short.end().kind, "blocked");
 	});
 
+	it("refuses raw deflate, unframed brotli and gzip after a text prefix, at any chunking", () => {
+		const leak = Buffer.from(`leak ${ECHO_SECRET}`);
+
+		const bodies: [string, Buffer][] = [
+			["raw deflate", deflateRawSync(leak)],
+			[
+				"unframed brotli",
+				brotliCompressSync(
+					Buffer.from(`${"A".repeat(64)}${ECHO_SECRET}${"B".repeat(64)}`),
+				),
+			],
+			[
+				"gzip after a prefix",
+				Buffer.concat([Buffer.from('{"data":"'), gzipSync(leak)]),
+			],
+		];
+
+		for (const [name, body] of bodies) {
+			for (const size of [1, 3, body.length]) {
+				const filter = new ReflectionFilter(forms);
+				const passed: Buffer[] = [];
+				let blocked = false;
+
+				for (let at = 0; at < body.length && !blocked; at += size) {
+					const step = filter.push(body.subarray(at, at + size));
+
+					if (step.kind === "pass") passed.push(step.bytes);
+					else blocked = true;
+				}
+
+				assert.equal(
+					blocked || filter.end().kind === "blocked",
+					true,
+					`${name} in ${size}-byte chunks`,
+				);
+				assert.equal(
+					passed.every((bytes) => bytes.every((byte) => byte >= 0x20)),
+					true,
+					`${name}: no binary byte passes`,
+				);
+			}
+		}
+	});
+
+	it("finds the secret as mixed-case hex and as base64 split by '*' or form feeds, across 3-byte chunks", () => {
+		const leak = Buffer.from(`leak ${ECHO_SECRET}`);
+		const base64 = leak.toString("base64");
+		let letters = 0;
+
+		const mixedHex = [...leak.toString("hex")]
+			.map((char) => {
+				if (!/[a-f]/.test(char)) return char;
+
+				letters += 1;
+
+				return letters % 2 === 0 ? char.toUpperCase() : char;
+			})
+			.join("");
+
+		const bodies: [string, string][] = [
+			["mixed-case hex", mixedHex],
+			["base64 split by *", [...base64].join("*")],
+			[
+				"base64 split by form feeds",
+				(base64.match(/.{1,4}/g) ?? []).join("\f"),
+			],
+		];
+
+		for (const [name, body] of bodies) {
+			assert.notEqual(body, body.toLowerCase(), name);
+
+			const bytes = Buffer.from(body);
+			const filter = new ReflectionFilter(forms);
+			let blocked = false;
+
+			for (let at = 0; at < bytes.length && !blocked; at += 3) {
+				blocked = filter.push(bytes.subarray(at, at + 3)).kind === "blocked";
+			}
+
+			assert.equal(blocked || filter.end().kind === "blocked", true, name);
+			assert.equal(new SecretScanner(forms).reveals(body), true, name);
+		}
+	});
+
+	it("passes text whose first two bytes happen to form a zlib header", () => {
+		for (const text of ["x^2 + 1", "x^", "80 items", "HKEY", "(4) items"]) {
+			const [first = 0, second = 0] = Buffer.from(text);
+
+			assert.equal(((first << 8) | second) % 31, 0, text);
+
+			const filter = new ReflectionFilter(forms);
+			const step = filter.push(Buffer.from(text));
+			const rest = filter.end();
+
+			assert.ok(step.kind === "pass" && rest.kind === "pass", text);
+			assert.equal(
+				Buffer.concat([step.bytes, rest.bytes]).toString(),
+				text,
+				text,
+			);
+		}
+	});
+
+	it("passes UTF-8 text with tabs, line breaks and form feeds unchanged", () => {
+		const body = Buffer.from('{"note":"caf\u00e9 \u2713"}\n\tline\r\n\fpage');
+		const filter = new ReflectionFilter(forms);
+		const first = filter.push(body.subarray(0, 13));
+		const second = filter.push(body.subarray(13));
+		const rest = filter.end();
+
+		assert.ok(
+			first.kind === "pass" && second.kind === "pass" && rest.kind === "pass",
+		);
+		assert.deepEqual(
+			Buffer.concat([first.bytes, second.bytes, rest.bytes]),
+			body,
+		);
+	});
+
 	it("finds the secret as hex, UTF-16 and whitespace-wrapped base64, across 3-byte chunks", () => {
 		const leak = `leak ${ECHO_SECRET}`;
 		const utf16be = Buffer.from(leak, "utf16le").swap16();
@@ -583,5 +805,107 @@ describe("reflection scanning", () => {
 		if (rest.kind === "pass") out.push(rest.bytes);
 
 		assert.equal(Buffer.concat(out).toString(), parts.join(""));
+	});
+
+	const filtered = (body: Buffer, size: number) => {
+		const filter = new ReflectionFilter(forms);
+		const passed: Buffer[] = [];
+
+		for (let at = 0; at < body.length; at += size) {
+			const step = filter.push(body.subarray(at, at + size));
+
+			if (step.kind === "blocked") {
+				return { blocked: true, out: Buffer.concat(passed) };
+			}
+
+			passed.push(step.bytes);
+		}
+
+		const rest = filter.end();
+
+		if (rest.kind === "blocked") {
+			return { blocked: true, out: Buffer.concat(passed) };
+		}
+
+		return { blocked: false, out: Buffer.concat([...passed, rest.bytes]) };
+	};
+
+	it("finds the secret as mixed-case hex with spaces between the pairs", () => {
+		const hex = Buffer.from(`leak ${ECHO_SECRET}`).toString("hex");
+
+		let letters = 0;
+
+		const spaced = [...hex]
+			.map((char) => {
+				if (!/[a-f]/.test(char)) return char;
+
+				letters += 1;
+
+				return letters % 2 === 0 ? char.toUpperCase() : char;
+			})
+			.join("")
+			.replace(/(.{2})/g, "$1 ")
+			.trim();
+
+		assert.notEqual(spaced, spaced.toLowerCase());
+
+		for (const size of [1, 3, spaced.length]) {
+			const result = filtered(Buffer.from(spaced), size);
+
+			assert.equal(result.blocked, true, `${size}-byte chunks`);
+			assert.equal(result.out.length, 0, `${size}-byte chunks`);
+		}
+	});
+
+	it("finds base64 split by non-alphabet runs longer than the hold, at any chunking", () => {
+		const base64 = Buffer.from(`leak ${ECHO_SECRET}`).toString("base64");
+		const hold = Math.max(...forms.map((form) => form.length)) * 6 - 1;
+
+		for (const gap of ["!", "\n"]) {
+			const body = Buffer.from([...base64].join(gap.repeat(hold + 8)));
+
+			for (const size of [1, 64, body.length]) {
+				assert.equal(
+					filtered(body, size).blocked,
+					true,
+					`${JSON.stringify(gap)} gaps in ${size}-byte chunks`,
+				);
+			}
+		}
+	});
+
+	it("refuses a C1 control character, whole or split across chunks", () => {
+		for (const text of ['{"note":"caf\u0085 next"}', "plain text \u009f end"]) {
+			const body = Buffer.from(text);
+
+			for (const size of [1, 3, body.length]) {
+				const result = filtered(body, size);
+
+				assert.equal(result.blocked, true, `${text} in ${size}-byte chunks`);
+				assert.equal(result.out.includes(Buffer.from([0xc2])), false, text);
+			}
+		}
+	});
+
+	it("passes non-ASCII text and emoji unchanged at any chunking", () => {
+		const body = Buffer.from(
+			'{"title":"caf\u00e9 \u{1f600} \u65e5\u672c\u8a9e \u00a0\u00ff\u0100","ok":true}\n',
+		);
+
+		for (const size of [1, 2, 3, body.length]) {
+			const result = filtered(body, size);
+
+			assert.equal(result.blocked, false, `${size}-byte chunks`);
+			assert.deepEqual(result.out, body, `${size}-byte chunks`);
+		}
+
+		const large = Buffer.from(
+			`{"items":[${Array.from({ length: 4000 }, (_, index) => `{"i":${index},"t":"caf\u00e9 \u{1f600}"}`).join(",")}]}`,
+		);
+
+		const result = filtered(large, 1024);
+
+		assert.equal(result.blocked, false);
+		assert.deepEqual(result.out, large);
 	});
 });

@@ -246,6 +246,16 @@ describe("gateway policy: request head", () => {
 		}
 	});
 
+	it("refuses the other method-override spellings", () => {
+		for (const name of ["X-Method-Override", "x-http-method"]) {
+			assert.equal(
+				code(head("GET", "/npm/x", [name, "DELETE"])),
+				"forbidden-header",
+				name,
+			);
+		}
+	});
+
 	it("trips on a loaded secret anywhere in the head", () => {
 		const secret = (text: string) => text.includes("s3cret");
 

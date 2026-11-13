@@ -165,6 +165,20 @@ describe("sandbox route registry", () => {
 		}
 	});
 
+	it("rejects a route that lists host among its request headers", () => {
+		for (const name of ["host", "HOST"]) {
+			const value = edited((table) => {
+				firstRoute(table).requestHeaders = ["accept", name];
+			});
+
+			assert.equal(
+				parseRouteTable(value, "test", EXE_DEV_PLATFORM).ok,
+				false,
+				name,
+			);
+		}
+	});
+
 	it("rejects duplicate route ids and prefixes", () => {
 		const value = edited((table) => {
 			const routes = table.routes;
