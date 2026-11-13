@@ -15,7 +15,12 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { deflateSync, gzipSync } from "node:zlib";
+import {
+	brotliCompressSync,
+	deflateRawSync,
+	deflateSync,
+	gzipSync,
+} from "node:zlib";
 import {
 	bindCredentials,
 	buildUpstreamHeaders,
@@ -586,6 +591,66 @@ describe("reflection scanning", () => {
 
 		short.push(Buffer.from([0x1f, 0x8b]));
 		assert.equal(short.end().kind, "blocked");
+	});
+
+	it("refuses raw deflate, unframed brotli and gzip after a text prefix, at any chunking", () => {
+		const leak = Buffer.from(`leak ${ECHO_SECRET}`);
+
+		const bodies: [string, Buffer][] = [
+			["raw deflate", deflateRawSync(leak)],
+			[
+				"unframed brotli",
+				brotliCompressSync(
+					Buffer.from(`${"A".repeat(64)}${ECHO_SECRET}${"B".repeat(64)}`),
+				),
+			],
+			[
+				"gzip after a prefix",
+				Buffer.concat([Buffer.from('{"data":"'), gzipSync(leak)]),
+			],
+		];
+
+		for (const [name, body] of bodies) {
+			for (const size of [1, 3, body.length]) {
+				const filter = new ReflectionFilter(forms);
+				const passed: Buffer[] = [];
+				let blocked = false;
+
+				for (let at = 0; at < body.length && !blocked; at += size) {
+					const step = filter.push(body.subarray(at, at + size));
+
+					if (step.kind === "pass") passed.push(step.bytes);
+					else blocked = true;
+				}
+
+				assert.equal(
+					blocked || filter.end().kind === "blocked",
+					true,
+					`${name} in ${size}-byte chunks`,
+				);
+				assert.equal(
+					passed.every((bytes) => bytes.every((byte) => byte >= 0x20)),
+					true,
+					`${name}: no binary byte passes`,
+				);
+			}
+		}
+	});
+
+	it("passes UTF-8 text with tabs, line breaks and form feeds unchanged", () => {
+		const body = Buffer.from('{"note":"caf\u00e9 \u2713"}\n\tline\r\n\fpage');
+		const filter = new ReflectionFilter(forms);
+		const first = filter.push(body.subarray(0, 13));
+		const second = filter.push(body.subarray(13));
+		const rest = filter.end();
+
+		assert.ok(
+			first.kind === "pass" && second.kind === "pass" && rest.kind === "pass",
+		);
+		assert.deepEqual(
+			Buffer.concat([first.bytes, second.bytes, rest.bytes]),
+			body,
+		);
 	});
 
 	it("finds the secret as hex, UTF-16 and whitespace-wrapped base64, across 3-byte chunks", () => {

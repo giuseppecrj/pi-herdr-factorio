@@ -502,6 +502,7 @@ On a credentialed route the gateway refuses these **[E `research/prior-art.md` r
 - **`TRACE`, `TRACK` and `CONNECT`.** These are refused globally, before routing, because a `TRACE` echo would return the injected header **[E `research/prior-art.md` §1.2]**.
 - **Compressed responses.** The gateway sends `Accept-Encoding: identity`. A response with any `Content-Encoding` header, `identity` included, becomes `403 response-blocked`, and so does a body whose first bytes are a gzip, zlib, framed brotli or zstd magic number, because the reflection scan cannot read it **[D]**. Codex fails closed on compressed bodies for the same reason **[E `research/prior-art.md` §2.3]**.
 - **Response types.** Only `application/json` and `text/*` may come back. Any other `Content-Type`, or none, becomes `403 response-blocked` before a byte is read. This refuses raw deflate, unframed brotli and gzip after a prefix served as binary, which no magic check sees.
+- **Binary bodies.** Every body byte must be UTF-8 text with no control character except tab, line feed, form feed and carriage return. Compressed data is not text at any offset, so raw deflate, unframed brotli and gzip after a prefix are refused under an allowed type too. A body that fails before its first bytes pass is a clean `403 response-blocked`. A later failure is `blocked_mid_stream`. A UTF-16 or Latin-1 body is refused the same way.
 
 ### 4.5 Response handling
 
@@ -510,7 +511,7 @@ On a credentialed route the gateway refuses these **[E `research/prior-art.md` r
   - A match in the headers sends `403 response-blocked`, and nothing upstream reaches the client.
   - For the body, no status line or header is sent until the filter passes its first bytes. Nothing passes until the first four bytes show no compression magic. After that the gateway holds back `6 × len(longest form) − 1` bytes until the next chunk arrives, so a match, even JSON-escaped, is found before any matching byte is written. A body blocked before its first bytes pass, which includes every short body and every one with compression magic, is a clean `403 response-blocked`, audited as `deny`.
   - A match later in a long body destroys the client connection with no further bytes. The status line has already gone, so a 403 is impossible. The audit records `decision: "blocked_mid_stream"`.
-  - **This scan is defense in depth and cannot be complete.** An upstream can always re-encode a secret in a way no scan reads. The primary control is that a secret binds only to a trusted upstream, under the owner's ceiling, on a read-only route.
+  - **This scan is defense in depth and cannot be complete.** An upstream can always re-encode a secret as text no scan reads. The primary control is that a secret binds only to a trusted upstream, under the owner's ceiling, on a read-only route.
 - **Request-side tripwire [D].** A request whose target, headers or body reveals a loaded secret in any of the four views is denied as `secret-in-request`. The sandbox should never hold a secret, so a hit means a leak path exists. The runner fails the stage. The audit line for that deny has the path `[redacted]`.
 
 ### 4.6 The confused-deputy rule
@@ -636,7 +637,7 @@ Upstream transport failures are not denies. They return `502 X-Proxy-Error: upst
 | `upstream-address-refused` | the resolved address is in a refused range |
 | `secret-in-request` | the request carries a loaded secret's bytes |
 | `redirect-refused` | a 3xx on a credentialed route |
-| `response-blocked` | reflection in the headers or body, any `Content-Encoding`, a `Content-Type` other than `application/json` or `text/*`, or a body with compression magic, on a credentialed route |
+| `response-blocked` | reflection in the headers or body, any `Content-Encoding`, a `Content-Type` other than `application/json` or `text/*`, or a body with compression magic or bytes that are not UTF-8 text, on a credentialed route |
 | `audit-unavailable` | the audit line could not be written, so nothing is forwarded |
 | `model-maximum-unknown` | an Anthropic request names a model with no entry in the frozen output-maximum table (F10c) |
 

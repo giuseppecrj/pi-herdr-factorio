@@ -691,21 +691,35 @@ function compressedMagic(head: Buffer): boolean {
 	);
 }
 
+function binaryByte(byte: number): boolean {
+	return (
+		(byte < 0x20 &&
+			byte !== 0x09 &&
+			byte !== 0x0a &&
+			byte !== 0x0c &&
+			byte !== 0x0d) ||
+		byte === 0x7f
+	);
+}
+
 /**
- * Streams a credentialed response body. Nothing passes until the first four
- * bytes show no compression magic. After that it holds back enough bytes
- * that a secret split across chunks, JSON-escaped, percent-encoded, hex,
- * UTF-16 or whitespace-wrapped base64, is found before any of its bytes
- * leave.
+ * Streams a credentialed response body. Every byte must be UTF-8 text with
+ * no control character but tab, line feed, form feed and carriage return,
+ * because compressed data, framed or not and at any offset, is not text.
+ * Nothing passes until the first four bytes show no compression magic.
+ * After that it holds back enough bytes that a secret split across chunks,
+ * JSON-escaped, percent-encoded, hex, UTF-16 or whitespace-wrapped base64,
+ * is found before any of its bytes leave.
  *
  * This scan is defense in depth and cannot be complete: an upstream can
- * always re-encode a secret in a way no scan reads, such as raw deflate.
- * The primary control is that a secret binds only to a trusted upstream
- * under the owner's ceiling, on a read-only route.
+ * always re-encode a secret as text no scan reads. The primary control is
+ * that a secret binds only to a trusted upstream under the owner's ceiling,
+ * on a read-only route.
  */
 export class ReflectionFilter {
 	readonly #scanner: SecretScanner;
 	readonly #hold: number;
+	readonly #utf8 = new TextDecoder("utf-8", { fatal: true });
 	#held: Buffer = Buffer.alloc(0);
 	#probed = false;
 
@@ -714,8 +728,21 @@ export class ReflectionFilter {
 		this.#hold = Math.max(MAGIC_PROBE_BYTES - 1, this.#scanner.longest * 6 - 1);
 	}
 
+	#text(chunk: Buffer, final: boolean): boolean {
+		if (chunk.some(binaryByte)) return false;
+
+		try {
+			this.#utf8.decode(chunk, { stream: !final });
+
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
 	push(chunk: Buffer): FilterStep {
 		const joined = Buffer.concat([this.#held, chunk]);
+		let unread = chunk;
 
 		if (!this.#probed) {
 			if (joined.length < MAGIC_PROBE_BYTES) {
@@ -727,9 +754,12 @@ export class ReflectionFilter {
 			if (compressedMagic(joined)) return { kind: "blocked" };
 
 			this.#probed = true;
+			unread = joined;
 		}
 
-		if (this.#scanner.reveals(joined)) return { kind: "blocked" };
+		if (!this.#text(unread, false) || this.#scanner.reveals(joined)) {
+			return { kind: "blocked" };
+		}
 
 		const emit = Math.max(0, joined.length - this.#hold);
 
@@ -745,6 +775,7 @@ export class ReflectionFilter {
 
 		if (
 			(!this.#probed && compressedMagic(rest)) ||
+			!this.#text(this.#probed ? Buffer.alloc(0) : rest, true) ||
 			this.#scanner.reveals(rest)
 		) {
 			return { kind: "blocked" };

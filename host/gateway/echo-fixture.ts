@@ -223,6 +223,27 @@ function respond(
 			);
 
 			return;
+		case "/api/reflect-deflate-raw-text":
+			res.writeHead(200, { "Content-Type": "text/plain" });
+			res.end(deflateRawSync(Buffer.from(`leak ${secret}`)));
+
+			return;
+		case "/api/reflect-brotli-json":
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(
+				brotliCompressSync(
+					Buffer.from(`${"A".repeat(64)}${secret}${"B".repeat(64)}`),
+				),
+			);
+
+			return;
+		case "/api/reflect-gzip-prefixed-text":
+			res.writeHead(200, { "Content-Type": "text/plain" });
+			res.end(
+				Buffer.concat([Buffer.from("xxxx"), gzipSync(Buffer.from(secret))]),
+			);
+
+			return;
 		case "/api/untyped":
 			res.writeHead(200);
 			res.end("ok");

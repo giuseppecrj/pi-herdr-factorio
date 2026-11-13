@@ -1087,6 +1087,21 @@ describe("gateway credential engine against the echo fixture", () => {
 		);
 	});
 
+	it("refuses raw deflate, unframed brotli and gzip after a prefix served as text or JSON", async () => {
+		for (const path of [
+			"/echo/api/reflect-deflate-raw-text",
+			"/echo/api/reflect-brotli-json",
+			"/echo/api/reflect-gzip-prefixed-text",
+		]) {
+			const reply = await call(h.socketPath, "GET", path);
+
+			assert.equal(reply.status, 403, path);
+			assert.equal(reply.code, "response-blocked", path);
+			assert.equal(reply.body, denyBody("response-blocked"), path);
+			assert.equal(h.audit.at(-1)?.reason, "response-blocked", path);
+		}
+	});
+
 	it("logs a template, not the path, when a secret is split by a slash or an encoded slash", async () => {
 		const lines = h.audit.length;
 
