@@ -4777,7 +4777,7 @@
 			{
 				"reason": "node:test/reporters is a Node built-in, not a repository test path",
 				"files": [
-					"docs/statecharts/journey/replay-merge-mid-repair.ts"
+					"docs/models/journey/replay-merge-mid-repair.ts"
 				],
 				"paths": [
 					"test/reporters"

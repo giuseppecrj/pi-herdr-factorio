@@ -908,8 +908,9 @@ L15 moved this plan to `docs/plans/later/` when it closed the program. Each row 
 | L11 | #758 | `a1a68b855ed3817e2fe8cbc2004b6b4523ad1506` | Host controller split. |
 | L12 | #760 | `7a9744d52053b2b69c81119091ebc62516b517b4` | Stage execution and receipt handling split. |
 | L13 | #761 | `8f7f1ff036ab7412c66806420d6119844f36568e` | `server` renamed to `host`, CLI and gates moved. |
-| L14 | #762 | Not on main when L15 was written. The coordinator records its squash commit when it rebases L15. | Tests mirror the source layout. |
-| L15 | This pull request | Set when the owner lands it. | Docs moved by authority and freshness, this plan closed. |
+| L14 | #762 | `96988c0f73f3b64116e4eda0109bc0ebaa21793e` | Tests mirror the source layout. |
+| CI | #765 | `2934424d8f1f9a0da88274d78d68df118114e76d` | `check` job timeout raised from 10 to 15 minutes after hosted-runner cancellations (#764). |
+| L15 | #763 | Set when it lands. | Docs moved by authority and freshness, this plan closed. |
 
 ### Qualification pending owner action
 
