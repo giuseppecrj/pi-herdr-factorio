@@ -136,13 +136,15 @@ A `FeedStep` has these members.
 
 Shep writes `<!-- factory-intake: <id> -->` in the issue body. The ID has 8 to 64 ASCII letters, digits or hyphens. The marker must occupy its entire line, with exactly those spaces and delimiters. The parser accepts LF and CRLF line endings. Missing, malformed, inline or duplicate markers give `intakeRef: null`. Two marker openings, including a malformed second marker, also add `duplicate_intake_marker:<12-character run prefix>` to `gaps`.
 
-The feed reads the body saved at admission and verifies its receipt and digest. It never reads the current GitHub body. An edit after the label cannot attach the run to another chat. An unverified discovery without an admission snapshot has `intakeRef: null`.
+The feed reads the body saved at admission and verifies its receipt and digest. It never reads the current GitHub body. An edit after the label cannot change the run's saved intake ID. An unverified discovery has `intakeRef: null`, even if an admission snapshot exists.
 
-Shep's bridge must retain `repositories` and `entries[].intakeRef`, correlate chats by the exact intake ID, and perform the per-pair reads above. These are additive v1 fields. Older readers may ignore them.
+`intakeRef` is neither authenticated nor unique. Any issue author can copy a marker. Only the owner's label gates admission, not the marker. The parser matches lines, not Markdown structure, so a lone marker inside a code fence or a multi-line HTML comment is accepted.
+
+Shep's bridge must retain `repositories` and `entries[].intakeRef`, correlate chats by the exact intake ID, and perform the per-pair reads above. It must handle the same `intakeRef` on several entries and keep their separate `repo` plus `issue` keys. These are additive v1 fields. Older readers may ignore them.
 
 ### Questions comment link
 
-The controller records the questions comment reference after posting or recovering its keyed comment. It checks the controller login, bot type, app identity when present, repository and issue, exact run and questions digest key, and the matching unedited GraphQL comment record. Multiple matching comments or unavailable edit evidence produce no reference. The private `contracts/<runId>/questions-comment.json` receipt contains only the run, repository, issue, questions digest and comment ID.
+The controller records the questions comment reference from the authenticated POST response's comment ID. When recovering an existing keyed comment, it checks the controller login, bot type, app identity when present, repository and issue, exact run and questions digest key, and the matching unedited GraphQL comment record. Multiple matching comments or unavailable edit evidence produce no reference. The private `contracts/<runId>/questions-comment.json` receipt contains only the run, repository, issue, questions digest and comment ID.
 
 The feed checks that receipt's private paths and bindings against `questions.json`, then constructs `https://github.com/<repo>/issues/<issue>#issuecomment-<id>`. It never uses a URL from issue text, comment text or a model reply. Reading the feed still makes no GitHub call. Old runs without this receipt, or runs whose reference could not be saved, have `questionsUrl: null`. This read-only change does not backfill historical comments or block clarification reporting when link evidence is unavailable.
 
@@ -156,7 +158,7 @@ The kinds are `question_asked`, `question_answered`, `spec_review`, `pr_review`,
 
 ## Change rules
 
-The code states no rule for evolving the feed. `version` is a literal `1` in `src/views/feed.ts`. The golden test compares the whole feed with `test/fixtures/owner-feed/feed-v1.json` using `deepEqual` (`test/src/views/feed.test.ts`, first test), so any added or removed field fails it until a person edits the fixture. That makes a change visible. It does not say which changes are allowed.
+The adopted stability rule below governs feed changes. `version` is a literal `1` in `src/views/feed.ts`. The golden test compares the whole feed with `test/fixtures/owner-feed/feed-v1.json` using `deepEqual` (`test/src/views/feed.test.ts`, first test), so any added or removed field fails it until a person edits the fixture. That makes a change visible. The rule below says which changes are allowed.
 
 The v1 stability rule is:
 
@@ -179,6 +181,18 @@ No option emits two versions. A v2 replaces v1 on the CLI and the route, unless 
 **Reader rules.** The reader ignores fields it does not know. It refuses a feed whose `version` is not 1 and shows a visible notice. It shows an unknown value in an open vocabulary as plain text and sends no push for an unknown `kind` or `group`. This confirms Shep's plan. The field is named `version`, not `v`.
 
 `test/fixtures/owner-feed/contract.ts` encodes the v1 field list. A test fails when a field is removed or `version` changes, and passes when a field is added.
+
+### v1 corrections (#731)
+
+These corrections change existing values:
+
+- `workingRunCount` includes `question_answered` runs.
+- `counts.blocked` excludes stale holds superseded by a newer admission.
+- Unverified hold entries retain their decimal `eventId` instead of `""`.
+- `controller.lastTick` and `metrics.computedAt` can be null when their saved timestamps are invalid.
+- `steps` can drop invalid entries, including receipts with a stage that does not match their directory.
+
+They stay v1 as a pre-release correction because no released bridge reads the feed yet. The Shep bridge in shep#140 is unbuilt. Future changes follow the stability rule above.
 
 ## Identify a run
 

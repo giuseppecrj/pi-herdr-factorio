@@ -116,7 +116,34 @@ export async function postQuestions(
 ): Promise<boolean> {
 	const key = questionsKey(run.runId, digest);
 
-	if (!(await postKeyed(input, adapter, writer, run, key, body))) return false;
+	const found = await hasKeyed(input, adapter, run.issue, key);
+
+	if (found === null) return false;
+
+	if (!found) {
+		const post = await writer.postComment(run.issue, body);
+
+		if (post.kind !== "posted") {
+			input.log("comment_unconfirmed", {
+				issue: run.issue,
+				runId: run.runId,
+				outcome: post.kind,
+			});
+
+			return false;
+		}
+
+		if (
+			await input.files.writeQuestionsComment({
+				runId: run.runId,
+				repo: adapter.repo,
+				issue: run.issue,
+				digest,
+				commentId: post.id,
+			})
+		)
+			return true;
+	}
 
 	const comments = await adapter.readComments(run.issue);
 

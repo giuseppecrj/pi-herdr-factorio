@@ -322,6 +322,38 @@ test("feed keeps one newest admission per issue, including unverified discoverie
 	});
 });
 
+test("a newer unverified discovery replaces an older claim and its counts", async () => {
+	await state(async (root) => {
+		const before = await readOwnerFeed({ stateDir: root, repo, now });
+		await addRun(root, 30, "needs_info");
+		const newer = runIdOf({ repo, issue: 30, eventId: "2" });
+		await save(root, ["status.json"], {
+			...JSON.parse(await readFile(join(root, "status.json"), "utf8")),
+			repo,
+			unverifiedClaims: [
+				{
+					runId: newer,
+					issue: 30,
+					eventId: "2",
+					since: now,
+					why: "issue",
+					failure: null,
+				},
+			],
+		});
+		const feed = await readOwnerFeed({ stateDir: root, repo, now });
+		const entries = feed.entries.filter((entry) => entry.issue === 30);
+		assert.equal(entries.length, 1);
+		assert.equal(entries[0]?.eventId, "2");
+		assert.equal(entries[0]?.kind, "blocked");
+		assert.deepEqual(feed.counts, {
+			...before.counts,
+			blocked: before.counts.blocked + 1,
+		});
+		assert.equal(feed.workingRunCount, before.workingRunCount);
+	});
+});
+
 test("a stale unverified predecessor cannot revive an expired terminal issue", async () => {
 	await state(async (root) => {
 		const old = await addRun(root, 30, "running");
@@ -429,9 +461,74 @@ test("feed refuses public and symlinked private admission, status and verdict pa
 	});
 });
 
+test("feed refuses a symlinked status file and intermediate admission directory", async () => {
+	await state(async (root) => {
+		const runId = await addRun(root, 30, "running", { title: "Private title" });
+		const status = join(root, "status.json");
+		await writeFile(`${status}.target`, await readFile(status), {
+			mode: 0o600,
+		});
+		await rm(status);
+		await symlink(`${status}.target`, status);
+		const admission = join(root, "admissions/github", repo, "30");
+		const snapshot = await readFile(join(admission, "1.json"));
+		await rm(admission, { recursive: true });
+		await mkdir(`${admission}.target`, { mode: 0o700 });
+		await writeFile(join(`${admission}.target`, "1.json"), snapshot, {
+			mode: 0o600,
+		});
+		await symlink(`${admission}.target`, admission);
+		const feed = await readOwnerFeed({ stateDir: root, repo, now });
+		assert.equal(feed.controller.lastTick, null);
+		assert.equal(
+			feed.entries.find((entry) => entry.runId === runId)?.title,
+			"Title unavailable",
+		);
+	});
+});
+
+test("feed refuses a foreign-owner status file even when its mode is private", async () => {
+	await state(async (root) => {
+		const fs = (await import("node:fs/promises")).default;
+		const { syncBuiltinESMExports } = await import("node:module");
+		const original = fs.lstat;
+		const status = join(root, "status.json");
+		const info = await lstat(status);
+		assert.equal(info.mode & 0o077, 0);
+		Object.defineProperty(fs, "lstat", {
+			value: async (...args: Parameters<typeof original>) => {
+				const result = await original(...args);
+
+				if (String(args[0]) === status) result.uid = info.uid + 1;
+
+				return result;
+			},
+		});
+		syncBuiltinESMExports();
+
+		try {
+			const feed = await readOwnerFeed({ stateDir: root, repo, now });
+			assert.equal(feed.controller.lastTick, null);
+		} finally {
+			Object.defineProperty(fs, "lstat", { value: original });
+			syncBuiltinESMExports();
+		}
+	});
+});
+
 for (const [name, body, expected] of [
 	["absent", "No marker", null],
 	["valid", "Request\n<!-- factory-intake: chat-1234 -->\n", "chat-1234"],
+	[
+		"code fence",
+		"```html\n<!-- factory-intake: chat-1234 -->\n```",
+		"chat-1234",
+	],
+	[
+		"multi-line comment",
+		"<!--\n<!-- factory-intake: chat-1234 -->\n-->",
+		"chat-1234",
+	],
 	["malformed", "<!-- factory-intake: short -->", null],
 	[
 		"duplicate",
@@ -559,7 +656,7 @@ test("repositories comes from the selected platform profile, even for an empty f
 	});
 });
 
-async function prepareQuestions(root: string) {
+async function prepareQuestions(root: string, delayCommentRead = false) {
 	const runId = await addRun(root, 30, "needs_info");
 	const github = new FakeGitHub(repo);
 	const issue = github.add(fakeIssue(30));
@@ -574,7 +671,22 @@ async function prepareQuestions(root: string) {
 		paging: { pageSize: 100, maxPages: 10 },
 	});
 
-	const writer = new GitHubTicketWriter({ exec: github.exec, repo });
+	const writer = new GitHubTicketWriter({
+		repo,
+		exec: async (command, args, options) => {
+			const result = await github.exec(command, args, options);
+
+			if (delayCommentRead)
+				github.failures.set(`repos/${repo}/issues/30/comments`, {
+					stdout: "",
+					stderr: "unavailable",
+					code: 1,
+				});
+
+			return result;
+		},
+	});
+
 	const run = { runId, issue: 30 };
 	const body = `Questions\n\n${questionsKey(runId, digest)}`;
 
@@ -637,6 +749,19 @@ test("questionsUrl is captured from the trusted comment and recovered after a mi
 			).questionsUrl,
 			asked.url,
 		);
+	});
+});
+
+test("questionsUrl uses the acknowledged POST id when the comments re-read is unavailable", async () => {
+	await state(async (root) => {
+		const asked = await prepareQuestions(root, true);
+		assert.equal(
+			(await readOwnerFeed({ stateDir: root, repo, now })).entries.find(
+				(entry) => entry.runId === asked.runId,
+			)?.questionsUrl,
+			asked.url,
+		);
+		assert.equal(asked.issue.comments.length, 1);
 	});
 });
 
