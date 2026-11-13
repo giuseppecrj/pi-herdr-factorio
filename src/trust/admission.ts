@@ -30,6 +30,7 @@ import {
 	type GitHubFailure,
 	type GitHubPaging,
 	GitHubTicketAdapter,
+	isBotLogin,
 	isLogin,
 	issueUrl,
 	isTimestamp,
@@ -129,6 +130,7 @@ export type AdmittedReceipt = ReceiptHeader & {
 	readonly eventId: string;
 	readonly eventAt: string;
 	readonly actor: string;
+	readonly actorType?: string | null;
 	readonly actorPermission: WritePermission;
 	readonly snapshotDigest: Digest;
 	readonly snapshotSource: SnapshotSource;
@@ -393,6 +395,8 @@ export function parseRecord(
 	const level = permission === null ? null : parsePermissionLevel(permission);
 	const eventAt = textField(receipt, "eventAt");
 	const actor = textField(receipt, "actor");
+	const rawActorType = fieldOf(receipt, "actorType");
+	const actorType = textField(receipt, "actorType");
 	const digest = textField(receipt, "snapshotDigest");
 	const source = textField(receipt, "snapshotSource");
 	const baseSha = textField(receipt, "baseSha");
@@ -410,6 +414,9 @@ export function parseRecord(
 		!isTimestamp(eventAt) ||
 		actor === null ||
 		!isLogin(actor) ||
+		(rawActorType !== undefined &&
+			rawActorType !== null &&
+			actorType === null) ||
 		level === null ||
 		!hasWriteAccess(level) ||
 		digest === null ||
@@ -423,7 +430,7 @@ export function parseRecord(
 		return null;
 	}
 
-	return {
+	const parsed: AdmittedReceipt = {
 		decision: "admitted",
 		repo: key.repo,
 		issue: key.issue,
@@ -438,6 +445,12 @@ export function parseRecord(
 		baseSha,
 		workflowDigest,
 	};
+
+	return rawActorType === undefined ? parsed : { ...parsed, actorType };
+}
+
+export function isBotAdmission(receipt: AdmittedReceipt): boolean {
+	return receipt.actorType === "Bot" || isBotLogin(receipt.actor);
 }
 
 function errorCode(error: Error): string | null {
@@ -639,6 +652,7 @@ type Bound = {
 	readonly eventId: string;
 	readonly eventAt: string;
 	readonly actor: string;
+	readonly actorType: string | null;
 	readonly actorPermission: WritePermission;
 	readonly snapshot: IssueSnapshot;
 	readonly snapshotDigest: Digest;
@@ -812,6 +826,7 @@ async function evaluate(input: {
 			eventId: event.id,
 			eventAt: event.at,
 			actor: actor.login,
+			actorType: actor.type,
 			actorPermission,
 			snapshot: proof.snapshot,
 			snapshotDigest: digest,

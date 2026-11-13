@@ -84,6 +84,7 @@ import type { StageExecutor } from "../../src/controller/launch.ts";
 import type { Log } from "../../src/controller/orchestrator.ts";
 import {
 	fileAdmissionStore,
+	isBotAdmission,
 	latestReadyEntry,
 } from "../../src/trust/admission.ts";
 import type { PlatformProfile, RepoSlug } from "../../src/trust/platform.ts";
@@ -510,7 +511,7 @@ export function controllerCandidatePort(config: {
 								latest.entry.actor.kind === "login" && latest.entry.actor.bot
 							) &&
 							admission.kind === "found" &&
-							!isBotLogin(admission.receipt.actor) &&
+							!isBotAdmission(admission.receipt) &&
 							admission.receipt.baseSha === state.pin.workflowSha
 								? "ready"
 								: "withdrawn";

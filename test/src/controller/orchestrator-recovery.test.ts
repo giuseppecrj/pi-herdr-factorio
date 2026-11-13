@@ -1930,6 +1930,102 @@ describe("Orchestrator stall aborts", () => {
 });
 
 describe("Orchestrator admissions recorded for a bot-applied ready event", () => {
+	for (const actor of [null, { login: "ghost", type: "User" }]) {
+		const shown = actor === null ? "withheld" : "ghost";
+
+		for (const actorType of ["Bot", "User", undefined]) {
+			for (const recovery of [
+				"admission",
+				"unmarked claim",
+				"blocked claim",
+				"running claim",
+				"marker only",
+			]) {
+				it(`recovers ${recovery} with stored actor type ${actorType ?? "unknown"} and ${shown} timeline actor only when not Bot`, async () => {
+					const ctx = world();
+					const issue = ctx.github.add(labeled(14));
+
+					if (recovery === "admission") {
+						const receipt = await admitTicket({
+							platform: EXE_DEV_PLATFORM,
+							exec: ctx.github.exec,
+							env: () => "/home/exedev",
+							repo,
+							issue: 14,
+							allowlist: [repo],
+							store: ctx.store,
+						});
+
+						assert.equal(receipt.decision, "admitted");
+					} else {
+						if (recovery === "unmarked claim") ctx.github.posts = ["lost"];
+
+						if (recovery === "running claim")
+							ctx.executor.fallback = { kind: "hang" };
+						await ctx.start().tick();
+
+						if (recovery === "marker only") ctx.files.claims.clear();
+					}
+
+					const key = `14/${EVENT_ID + 14}`;
+					const receipt = ctx.store.records.get(key);
+
+					assert.ok(receipt);
+					const stored = { ...receipt, actor: "automation", actorType };
+
+					if (actorType === undefined) delete stored.actorType;
+					ctx.store.records.set(key, stored);
+					issue.timeline = [readyEventBy(actor)];
+					const launched = ctx.executor.launches.length;
+
+					ctx.executor.fallback = { kind: "hang" };
+					ctx.clock.t += 30_000;
+					ctx.github.calls.length = 0;
+					const report = await ctx.start().tick();
+
+					if (actorType === "Bot") {
+						assert.deepEqual(report.runs, []);
+						assert.equal(ctx.executor.launches.length, launched);
+
+						if (recovery === "admission") {
+							assert.deepEqual(report.refused, [
+								{ issue: 14, reasons: ["bot_actor"] },
+							]);
+							assert.deepEqual(statuses(ctx.github, 14), []);
+						} else {
+							assert.ok(statuses(ctx.github, 14).at(-1)?.endsWith(":released"));
+							assert.ok(
+								ctx.logs.some(
+									(entry) =>
+										entry.event === "claim_released" &&
+										entry.fields.why === "bot_actor",
+								),
+							);
+						}
+
+						ctx.clock.t += 30_000;
+						await ctx.start().tick();
+						assert.equal(ctx.executor.launches.length, launched);
+					} else {
+						assert.deepEqual(runIssues(report), [14]);
+
+						if (recovery !== "running claim")
+							assert.equal(ctx.executor.launches.length, launched + 1);
+						assert.ok(
+							!statuses(ctx.github, 14).some((s) => s.endsWith(":released")),
+						);
+					}
+
+					assert.ok(
+						!ctx.github.calls.some((call) =>
+							call.join(" ").includes("collaborators/automation/permission"),
+						),
+					);
+				});
+			}
+		}
+	}
+
 	for (const login of [BOT_LOGIN, "renovate"]) {
 		it(`refuses a recorded, unmarked admission of ${login} as bot_actor and launches nothing`, async () => {
 			const ctx = world();

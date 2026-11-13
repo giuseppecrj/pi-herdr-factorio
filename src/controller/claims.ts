@@ -18,7 +18,7 @@ import type { GitHubFailure } from "../github/adapter.ts";
 import type { LedgerOutbox } from "../ledger/outbox.ts";
 import type { AttemptEnd } from "../ledger/schema.ts";
 import type { RunAccounting, TerminalCause } from "../ledger/terminal.ts";
-import type { AdmittedReceipt } from "../trust/admission.ts";
+import { type AdmittedReceipt, isBotAdmission } from "../trust/admission.ts";
 import {
 	type Marker,
 	type MarkerDefect,
@@ -525,16 +525,19 @@ export async function localMarker(
 export async function admittedFields(
 	input: Pick<OrchestratorInput, "store" | "repo">,
 	claim: ClaimRecord,
-): Promise<Pick<
-	Marker,
-	| "eventAt"
-	| "snapshotDigest"
-	| "workflowSha"
-	| "workflowDigest"
-	| "stage"
-	| "attempt"
-	| "usage"
-> | null> {
+): Promise<
+	| (Pick<
+			Marker,
+			| "eventAt"
+			| "snapshotDigest"
+			| "workflowSha"
+			| "workflowDigest"
+			| "stage"
+			| "attempt"
+			| "usage"
+	  > & { readonly botActor: boolean })
+	| null
+> {
 	const stored = await input.store.read({
 		repo: input.repo,
 		issue: claim.issue,
@@ -544,6 +547,7 @@ export async function admittedFields(
 	if (stored.kind !== "found") return null;
 
 	return {
+		botActor: isBotAdmission(stored.receipt),
 		eventAt: stored.receipt.eventAt,
 		snapshotDigest: stored.receipt.snapshotDigest,
 		workflowSha: stored.receipt.baseSha,
