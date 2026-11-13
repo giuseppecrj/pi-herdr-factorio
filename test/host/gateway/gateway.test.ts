@@ -1121,6 +1121,20 @@ describe("gateway credential engine against the echo fixture", () => {
 		assert.equal(h.audit.length, lines + 2);
 	});
 
+	it("refuses a reflection as mixed-case hex or as base64 split by '*' or form feeds", async () => {
+		for (const path of [
+			"/echo/api/reflect-hex-mixed",
+			"/echo/api/reflect-base64-star",
+			"/echo/api/reflect-base64-form-feed",
+		]) {
+			const reply = await call(h.socketPath, "GET", path);
+
+			assert.equal(reply.status, 403, path);
+			assert.equal(reply.code, "response-blocked", path);
+			assert.equal(h.audit.at(-1)?.reason, "response-blocked", path);
+		}
+	});
+
 	it("keeps neither half of a secret split by %3f or %2e, admitted or denied as ambiguous", async () => {
 		const head = ECHO_SECRET.slice(0, 16);
 		const tail = ECHO_SECRET.slice(16);

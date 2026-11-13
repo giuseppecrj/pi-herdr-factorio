@@ -600,10 +600,31 @@ function withoutWhitespace(bytes: Buffer): Buffer {
 	);
 }
 
+/** The bytes with ASCII capitals lowered, so mixed-case hex reads as the lower-case form. */
+function lowerCased(bytes: Buffer): Buffer {
+	return Buffer.from(
+		bytes.map((byte) => (byte >= 0x41 && byte <= 0x5a ? byte + 0x20 : byte)),
+	);
+}
+
+function base64Byte(byte: number): boolean {
+	return (
+		(byte >= 0x30 && byte <= 0x39) ||
+		(byte >= 0x41 && byte <= 0x5a) ||
+		(byte >= 0x61 && byte <= 0x7a) ||
+		[0x2b, 0x2d, 0x2f, 0x3d, 0x5f].includes(byte)
+	);
+}
+
+/** The bytes outside the base64 and base64url alphabets removed, as Node's decoder skips them. */
+function base64Only(bytes: Buffer): Buffer {
+	return Buffer.from(bytes.filter(base64Byte));
+}
+
 /**
  * The views a secret is looked for in: raw, JSON-unescaped,
- * percent-decoded and whitespace-stripped. Hex and UTF-16 are forms of the
- * secret, so the raw view finds them.
+ * percent-decoded, whitespace-stripped, lower-cased and base64-alphabet
+ * only. Hex and UTF-16 are forms of the secret, so the raw view finds them.
  */
 export function decodedViews(bytes: Buffer): Buffer[] {
 	return [
@@ -611,6 +632,8 @@ export function decodedViews(bytes: Buffer): Buffer[] {
 		jsonUnescaped(bytes),
 		percentDecoded(bytes),
 		withoutWhitespace(bytes),
+		lowerCased(bytes),
+		base64Only(bytes),
 	];
 }
 
@@ -708,8 +731,8 @@ function binaryByte(byte: number): boolean {
  * because compressed data, framed or not and at any offset, is not text.
  * Nothing passes until the first four bytes show no compression magic.
  * After that it holds back enough bytes that a secret split across chunks,
- * JSON-escaped, percent-encoded, hex, UTF-16 or whitespace-wrapped base64,
- * is found before any of its bytes leave.
+ * JSON-escaped, percent-encoded, hex in any case, UTF-16, or base64 split by
+ * bytes outside its alphabet, is found before any of its bytes leave.
  *
  * This scan is defense in depth and cannot be complete: an upstream can
  * always re-encode a secret as text no scan reads. The primary control is

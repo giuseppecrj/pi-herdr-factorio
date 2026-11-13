@@ -507,12 +507,12 @@ On a credentialed route the gateway refuses these **[E `research/prior-art.md` r
 ### 4.5 Response handling
 
 - **Header scrub [E `research/prior-art.md` recommendation 6].** The auth and cookie headers in section 3.5 are never copied, and only `responseHeaders` pass.
-- **Reflection check [E `research/prior-art.md` recommendation 6, which marks it as new].** The gateway scans response headers and the streamed body in four views, raw, JSON-unescaped, percent-decoded and with ASCII whitespace removed, for the secret's raw bytes, its hex in both cases, its UTF-16LE and UTF-16BE, its base64 and base64url at every offset, and its percent-encoded forms **[D]**.
+- **Reflection check [E `research/prior-art.md` recommendation 6, which marks it as new].** The gateway scans response headers and the streamed body in six views, raw, JSON-unescaped, percent-decoded, with ASCII whitespace removed, with ASCII capitals lowered, and with every byte outside the base64 and base64url alphabets removed, for the secret's raw bytes, its hex in both cases, its UTF-16LE and UTF-16BE, its base64 and base64url at every offset, and its percent-encoded forms **[D]**.
   - A match in the headers sends `403 response-blocked`, and nothing upstream reaches the client.
   - For the body, no status line or header is sent until the filter passes its first bytes. Nothing passes until the first four bytes show no compression magic. After that the gateway holds back `6 × len(longest form) − 1` bytes until the next chunk arrives, so a match, even JSON-escaped, is found before any matching byte is written. A body blocked before its first bytes pass, which includes every short body and every one with compression magic, is a clean `403 response-blocked`, audited as `deny`.
   - A match later in a long body destroys the client connection with no further bytes. The status line has already gone, so a 403 is impossible. The audit records `decision: "blocked_mid_stream"`.
   - **This scan is defense in depth and cannot be complete.** An upstream can always re-encode a secret as text no scan reads. The primary control is that a secret binds only to a trusted upstream, under the owner's ceiling, on a read-only route.
-- **Request-side tripwire [D].** A request whose target, headers or body reveals a loaded secret in any of the four views is denied as `secret-in-request`. The sandbox should never hold a secret, so a hit means a leak path exists. The runner fails the stage. The audit line for that deny has the path `[redacted]`.
+- **Request-side tripwire [D].** A request whose target, headers or body reveals a loaded secret in any of the six views is denied as `secret-in-request`. The sandbox should never hold a secret, so a hit means a leak path exists. The runner fails the stage. The audit line for that deny has the path `[redacted]`.
 
 ### 4.6 The confused-deputy rule
 

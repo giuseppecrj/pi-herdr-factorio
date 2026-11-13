@@ -637,6 +637,46 @@ describe("reflection scanning", () => {
 		}
 	});
 
+	it("finds the secret as mixed-case hex and as base64 split by '*' or form feeds, across 3-byte chunks", () => {
+		const leak = Buffer.from(`leak ${ECHO_SECRET}`);
+		const base64 = leak.toString("base64");
+		let letters = 0;
+
+		const mixedHex = [...leak.toString("hex")]
+			.map((char) => {
+				if (!/[a-f]/.test(char)) return char;
+
+				letters += 1;
+
+				return letters % 2 === 0 ? char.toUpperCase() : char;
+			})
+			.join("");
+
+		const bodies: [string, string][] = [
+			["mixed-case hex", mixedHex],
+			["base64 split by *", [...base64].join("*")],
+			[
+				"base64 split by form feeds",
+				(base64.match(/.{1,4}/g) ?? []).join("\f"),
+			],
+		];
+
+		for (const [name, body] of bodies) {
+			assert.notEqual(body, body.toLowerCase(), name);
+
+			const bytes = Buffer.from(body);
+			const filter = new ReflectionFilter(forms);
+			let blocked = false;
+
+			for (let at = 0; at < bytes.length && !blocked; at += 3) {
+				blocked = filter.push(bytes.subarray(at, at + 3)).kind === "blocked";
+			}
+
+			assert.equal(blocked || filter.end().kind === "blocked", true, name);
+			assert.equal(new SecretScanner(forms).reveals(body), true, name);
+		}
+	});
+
 	it("passes UTF-8 text with tabs, line breaks and form feeds unchanged", () => {
 		const body = Buffer.from('{"note":"caf\u00e9 \u2713"}\n\tline\r\n\fpage');
 		const filter = new ReflectionFilter(forms);
