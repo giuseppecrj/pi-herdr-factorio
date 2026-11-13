@@ -535,19 +535,32 @@ const JSON_ESCAPES = new Map<string, number>([
 	["t", 0x09],
 ]);
 
-function hexAt(bytes: Buffer, at: number, length: number): number | null {
-	const text = bytes.toString("latin1", at, at + length);
+const HEX_DIGITS = "0123456789abcdef";
 
-	return text.length === length && /^[0-9A-Fa-f]+$/.test(text)
-		? Number.parseInt(text, 16)
-		: null;
+function hexAt(bytes: Buffer, at: number, length: number): number | null {
+	if (at + length > bytes.length) return null;
+
+	let value = 0;
+
+	for (let index = at; index < at + length; index += 1) {
+		const digit = HEX_DIGITS.indexOf(
+			String.fromCharCode(bytes[index] ?? 0).toLowerCase(),
+		);
+
+		if (digit < 0) return null;
+
+		value = value * 16 + digit;
+	}
+
+	return value;
 }
 
 /** The bytes with JSON string escapes decoded. Anything that is not an escape is kept. */
 export function jsonUnescaped(bytes: Buffer): Buffer {
 	if (!bytes.includes(0x5c)) return bytes;
 
-	const out: Buffer[] = [];
+	const out = Buffer.alloc(bytes.length);
+	let size = 0;
 	let start = 0;
 	let at = bytes.indexOf(0x5c);
 
@@ -557,12 +570,11 @@ export function jsonUnescaped(bytes: Buffer): Buffer {
 		const unit = next === "u" ? hexAt(bytes, at + 2, 4) : null;
 
 		if (simple !== undefined || unit !== null) {
-			out.push(bytes.subarray(start, at));
-			out.push(
+			size += bytes.copy(out, size, start, at);
+			size =
 				simple !== undefined
-					? Buffer.from([simple])
-					: Buffer.from(String.fromCharCode(unit ?? 0), "utf8"),
-			);
+					? out.writeUInt8(simple, size)
+					: size + out.write(String.fromCharCode(unit ?? 0), size, "utf8");
 			start = at + (simple !== undefined ? 2 : 6);
 			at = bytes.indexOf(0x5c, start);
 		} else {
@@ -570,78 +582,96 @@ export function jsonUnescaped(bytes: Buffer): Buffer {
 		}
 	}
 
-	out.push(bytes.subarray(start));
+	size += bytes.copy(out, size, start);
 
-	return Buffer.concat(out);
+	return out.subarray(0, size);
 }
 
 /** The bytes with every `%XX` decoded. Anything else is kept. */
 export function percentDecoded(bytes: Buffer): Buffer {
 	if (!bytes.includes(0x25)) return bytes;
 
-	const out: number[] = [];
+	const out = Buffer.alloc(bytes.length);
+	let size = 0;
 
 	for (let at = 0; at < bytes.length; at += 1) {
 		const byte = bytes[at] ?? 0;
 		const value = byte === 0x25 ? hexAt(bytes, at + 1, 2) : null;
 
-		if (value === null) {
-			out.push(byte);
-		} else {
-			out.push(value);
-			at += 2;
+		out[size] = value ?? byte;
+		size += 1;
+		at += value === null ? 0 : 2;
+	}
+
+	return out.subarray(0, size);
+}
+
+/** A byte-for-byte translation table: each byte's replacement, or -1 to drop it. */
+function byteTable(map: (byte: number) => number | null): Int16Array {
+	return Int16Array.from({ length: 256 }, (_, byte) => map(byte) ?? -1);
+}
+
+const WITHOUT_WHITESPACE = byteTable((byte) =>
+	[0x09, 0x0a, 0x0d, 0x20].includes(byte) ? null : byte,
+);
+
+const LOWER_CASED = byteTable((byte) =>
+	byte >= 0x41 && byte <= 0x5a ? byte + 0x20 : byte,
+);
+
+const BASE64_ONLY = byteTable((byte) =>
+	/[0-9A-Za-z+\-/=_]/.test(String.fromCharCode(byte)) ? byte : null,
+);
+
+function translated(bytes: Buffer, table: Int16Array): Buffer {
+	const out = Buffer.alloc(bytes.length);
+	let size = 0;
+
+	for (let at = 0; at < bytes.length; at += 1) {
+		const value = table[bytes[at] ?? 0] ?? -1;
+
+		if (value >= 0) {
+			out[size] = value;
+			size += 1;
 		}
 	}
 
-	return Buffer.from(out);
+	return out.subarray(0, size);
 }
 
 /** The bytes with ASCII whitespace removed, so wrapped base64 reads whole. */
 function withoutWhitespace(bytes: Buffer): Buffer {
-	return Buffer.from(
-		bytes.filter((byte) => ![0x09, 0x0a, 0x0d, 0x20].includes(byte)),
-	);
+	return translated(bytes, WITHOUT_WHITESPACE);
 }
 
 /** The bytes with ASCII capitals lowered, so mixed-case hex reads as the lower-case form. */
 function lowerCased(bytes: Buffer): Buffer {
-	return Buffer.from(
-		bytes.map((byte) => (byte >= 0x41 && byte <= 0x5a ? byte + 0x20 : byte)),
-	);
-}
-
-function base64Byte(byte: number): boolean {
-	return (
-		(byte >= 0x30 && byte <= 0x39) ||
-		(byte >= 0x41 && byte <= 0x5a) ||
-		(byte >= 0x61 && byte <= 0x7a) ||
-		[0x2b, 0x2d, 0x2f, 0x3d, 0x5f].includes(byte)
-	);
+	return translated(bytes, LOWER_CASED);
 }
 
 /** The bytes outside the base64 and base64url alphabets removed, as Node's decoder skips them. */
 function base64Only(bytes: Buffer): Buffer {
-	return Buffer.from(bytes.filter(base64Byte));
+	return translated(bytes, BASE64_ONLY);
 }
 
 /**
  * The views a secret is looked for in: raw, JSON-unescaped,
  * percent-decoded, whitespace-stripped, lower-cased, both whitespace-stripped
  * and lower-cased, and base64-alphabet only. Hex and UTF-16 are forms of the
- * secret, so the raw view finds them.
+ * secret, so the raw view finds them. Each view is built only when the
+ * previous one has been read, so a whole-body scan holds few at once.
  */
-export function decodedViews(bytes: Buffer): Buffer[] {
+export function* decodedViews(bytes: Buffer): Generator<Buffer> {
+	yield bytes;
+	yield jsonUnescaped(bytes);
+	yield percentDecoded(bytes);
+
 	const stripped = withoutWhitespace(bytes);
 
-	return [
-		bytes,
-		jsonUnescaped(bytes),
-		percentDecoded(bytes),
-		stripped,
-		lowerCased(bytes),
-		lowerCased(stripped),
-		base64Only(bytes),
-	];
+	yield stripped;
+	yield lowerCased(stripped);
+	yield lowerCased(bytes);
+	yield base64Only(bytes);
 }
 
 /**
@@ -679,7 +709,11 @@ export class SecretScanner {
 
 		const bytes = Buffer.isBuffer(input) ? input : Buffer.from(input, "latin1");
 
-		return decodedViews(bytes).some((view) => this.contains(view));
+		for (const view of decodedViews(bytes)) {
+			if (this.contains(view)) return true;
+		}
+
+		return false;
 	}
 
 	get longest(): number {
@@ -687,11 +721,20 @@ export class SecretScanner {
 	}
 }
 
+/**
+ * The largest credentialed response body the gateway will hold. The whole
+ * body stays in memory until it is scanned, so this bounds that memory per
+ * request.
+ */
+export const CREDENTIALED_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
+
 export type FilterStep =
 	| { readonly kind: "pass"; readonly bytes: Buffer }
 	| { readonly kind: "blocked" };
 
 const MAGIC_PROBE_BYTES = 4;
+
+const FIRST_BODY_BYTES = 64 * 1024;
 
 /**
  * True when a body starts like gzip, framed brotli or zstd data, which the
@@ -729,16 +772,21 @@ function binaryByte(byte: number): boolean {
 const C1_CONTROL = /[\u0080-\u009f]/;
 
 /**
- * Streams a credentialed response body. Every byte must be UTF-8 text with
- * no control character, ASCII or C1, but tab, line feed, form feed and
+ * Holds a credentialed response body whole and releases it only from `end`,
+ * after the complete body has been scanned once in every decoded view, so
+ * no byte of it leaves before the decision. Every byte must be UTF-8 text
+ * with no control character, ASCII or C1, but tab, line feed, form feed and
  * carriage return, because compressed data, framed or not and at any
- * offset, is not text. Nothing passes until the first four bytes show no
- * compression magic. After that it holds back enough bytes that a secret
- * split across chunks, JSON-escaped, percent-encoded, hex in any case,
- * UTF-16, or base64 split by bytes outside its alphabet, is found before
- * any of its bytes leave. It also keeps the body's last base64-alphabet
- * bytes across chunks, so base64 split by longer runs outside its alphabet
- * still blocks the body before its last byte leaves.
+ * offset, is not text. The body is copied into one buffer that doubles as
+ * it fills and never grows past `cap`. A body over `cap` bytes is blocked as
+ * soon as it passes the cap. `end` and a refusal drop every byte the filter
+ * held, so `retained` is then zero.
+ *
+ * `push` also refuses early, before the body ends: on compression magic in
+ * the first four bytes, on a byte that is not text, and on a secret found
+ * in the last chunk plus a window of the bytes before it or in the body's
+ * last base64-alphabet bytes. Early refusal only stops reading sooner; the
+ * whole-body scan in `end` is the decision.
  *
  * This scan is defense in depth and cannot be complete: an upstream can
  * always re-encode a secret as text no scan reads. The primary control is
@@ -748,14 +796,60 @@ const C1_CONTROL = /[\u0080-\u009f]/;
 export class ReflectionFilter {
 	readonly #scanner: SecretScanner;
 	readonly #hold: number;
+	readonly #cap: number;
 	readonly #utf8 = new TextDecoder("utf-8", { fatal: true });
 	#held: Buffer = Buffer.alloc(0);
 	#alphabet: Buffer = Buffer.alloc(0);
+	#body: Buffer | null = null;
+	#size = 0;
 	#probed = false;
+	#refused = false;
 
-	constructor(forms: readonly Buffer[]) {
+	constructor(
+		forms: readonly Buffer[],
+		cap: number = CREDENTIALED_RESPONSE_MAX_BYTES,
+	) {
 		this.#scanner = new SecretScanner(forms);
 		this.#hold = Math.max(MAGIC_PROBE_BYTES - 1, this.#scanner.longest * 6 - 1);
+		this.#cap = cap;
+	}
+
+	/** Bytes held between calls: the body buffer's capacity and the scan tails. */
+	get retained(): number {
+		return (
+			(this.#body?.length ?? 0) + this.#held.length + this.#alphabet.length
+		);
+	}
+
+	#release(): void {
+		this.#body = null;
+		this.#held = Buffer.alloc(0);
+		this.#alphabet = Buffer.alloc(0);
+	}
+
+	#blocked(): FilterStep {
+		this.#refused = true;
+		this.#release();
+
+		return { kind: "blocked" };
+	}
+
+	#keep(chunk: Buffer): void {
+		const size = this.#size + chunk.length;
+		let body = this.#body ?? Buffer.alloc(0);
+
+		if (body.length < size) {
+			const grown = Buffer.alloc(
+				Math.min(this.#cap, Math.max(size, body.length * 2, FIRST_BODY_BYTES)),
+			);
+
+			body.copy(grown, 0, 0, this.#size);
+			body = grown;
+		}
+
+		chunk.copy(body, this.#size);
+		this.#body = body;
+		this.#size = size;
 	}
 
 	#text(chunk: Buffer, final: boolean): boolean {
@@ -772,14 +866,22 @@ export class ReflectionFilter {
 	#alphabetReveals(unread: Buffer): boolean {
 		const alphabet = Buffer.concat([this.#alphabet, base64Only(unread)]);
 
-		this.#alphabet = alphabet.subarray(
-			Math.max(0, alphabet.length - this.#scanner.longest),
+		this.#alphabet = Buffer.from(
+			alphabet.subarray(Math.max(0, alphabet.length - this.#scanner.longest)),
 		);
 
 		return this.#scanner.contains(alphabet);
 	}
 
 	push(chunk: Buffer): FilterStep {
+		const nothing: FilterStep = { kind: "pass", bytes: Buffer.alloc(0) };
+
+		if (this.#refused || this.#size + chunk.length > this.#cap) {
+			return this.#blocked();
+		}
+
+		this.#keep(chunk);
+
 		const joined = Buffer.concat([this.#held, chunk]);
 		let unread = chunk;
 
@@ -787,10 +889,10 @@ export class ReflectionFilter {
 			if (joined.length < MAGIC_PROBE_BYTES) {
 				this.#held = joined;
 
-				return { kind: "pass", bytes: Buffer.alloc(0) };
+				return nothing;
 			}
 
-			if (compressedMagic(joined)) return { kind: "blocked" };
+			if (compressedMagic(joined)) return this.#blocked();
 
 			this.#probed = true;
 			unread = joined;
@@ -801,30 +903,32 @@ export class ReflectionFilter {
 			this.#scanner.reveals(joined) ||
 			this.#alphabetReveals(unread)
 		) {
-			return { kind: "blocked" };
+			return this.#blocked();
 		}
 
-		const emit = Math.max(0, joined.length - this.#hold);
+		this.#held = Buffer.from(
+			joined.subarray(Math.max(0, joined.length - this.#hold)),
+		);
 
-		this.#held = joined.subarray(emit);
-
-		return { kind: "pass", bytes: joined.subarray(0, emit) };
+		return nothing;
 	}
 
 	end(): FilterStep {
-		const rest = this.#held;
+		const body = (this.#body ?? Buffer.alloc(0)).subarray(0, this.#size);
+		const unread = this.#probed ? Buffer.alloc(0) : this.#held;
 
-		this.#held = Buffer.alloc(0);
+		this.#release();
 
 		if (
-			(!this.#probed && compressedMagic(rest)) ||
-			!this.#text(this.#probed ? Buffer.alloc(0) : rest, true) ||
-			this.#scanner.reveals(rest)
+			this.#refused ||
+			(!this.#probed && compressedMagic(unread)) ||
+			!this.#text(unread, true) ||
+			this.#scanner.reveals(body)
 		) {
 			return { kind: "blocked" };
 		}
 
-		return { kind: "pass", bytes: rest };
+		return { kind: "pass", bytes: body };
 	}
 }
 

@@ -1183,8 +1183,8 @@ export class Gateway implements AdmissionState {
 
 		const headers = responseHeadersFor(route, incoming.rawHeaders);
 
-		// A credentialed response sends no header until its filter passes the
-		// first bytes, so a body blocked before then is a clean 403.
+		// A credentialed response sends no header until its filter has scanned
+		// the whole body, so a blocked body is always a clean 403.
 		const head = () => {
 			if (!res.headersSent) {
 				res.writeHead(status, [...headers.flat(), "Connection", "close"]);
@@ -1196,13 +1196,7 @@ export class Gateway implements AdmissionState {
 
 		if (filter === null) head();
 
-		const blocked = () => {
-			if (!res.headersSent) return blockedHead("response-blocked");
-
-			upstream.destroy();
-			res.destroy();
-			done("blocked_mid_stream", "response-blocked", status);
-		};
+		const blocked = () => blockedHead("response-blocked");
 
 		const meter = responseMeter(exchange.meter);
 

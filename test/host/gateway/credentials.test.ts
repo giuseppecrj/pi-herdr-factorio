@@ -25,6 +25,7 @@ import {
 	bindCredentials,
 	buildUpstreamHeaders,
 	type Ceilings,
+	CREDENTIALED_RESPONSE_MAX_BYTES,
 	isCredentialHeader,
 	loadCeilings,
 	loadSecrets,
@@ -35,6 +36,7 @@ import {
 	SecretScanner,
 	secretForms,
 } from "../../../host/gateway/credentials.ts";
+import { cleanBody, gappedBase64 } from "../../../host/gateway/echo-fixture.ts";
 import { type Route, type RouteTable } from "../../../host/gateway/routes.ts";
 import { modelTable } from "./route-fixtures.ts";
 import { EXE_DEV_PLATFORM } from "../../../src/trust/platform.ts";
@@ -865,13 +867,111 @@ describe("reflection scanning", () => {
 			const body = Buffer.from([...base64].join(gap.repeat(hold + 8)));
 
 			for (const size of [1, 64, body.length]) {
+				const result = filtered(body, size);
+
 				assert.equal(
-					filtered(body, size).blocked,
+					result.blocked,
 					true,
 					`${JSON.stringify(gap)} gaps in ${size}-byte chunks`,
 				);
+				assert.equal(
+					result.out.length,
+					0,
+					`${JSON.stringify(gap)} gaps in ${size}-byte chunks: no byte passes`,
+				);
 			}
 		}
+	});
+
+	it("passes no byte of a clean body until it ends, then all of it", () => {
+		const body = Buffer.from(`{"items":"${"clean text ".repeat(400)}"}`);
+		const filter = new ReflectionFilter(forms);
+		let passed = 0;
+
+		for (let at = 0; at < body.length; at += 64) {
+			const step = filter.push(body.subarray(at, at + 64));
+
+			assert.equal(step.kind, "pass", `@${at}`);
+			passed += step.kind === "pass" ? step.bytes.length : 0;
+		}
+
+		assert.equal(passed, 0);
+
+		const rest = filter.end();
+
+		assert.equal(rest.kind, "pass");
+		assert.equal(rest.kind === "pass" && rest.bytes.equals(body), true);
+	});
+
+	it("blocks a body over the cap with no byte passed, and passes one at the cap byte for byte", () => {
+		const over = Buffer.alloc(CREDENTIALED_RESPONSE_MAX_BYTES + 1, "a");
+
+		for (const size of [64 * 1024, over.length]) {
+			const result = filtered(over, size);
+
+			assert.equal(result.blocked, true, `${size}-byte chunks`);
+			assert.equal(result.out.length, 0, `${size}-byte chunks`);
+		}
+
+		const at = over.subarray(0, CREDENTIALED_RESPONSE_MAX_BYTES);
+		const clean = filtered(at, 64 * 1024);
+
+		assert.equal(clean.blocked, false);
+		assert.equal(clean.out.length, at.length);
+		assert.equal(clean.out.equals(at), true);
+	});
+
+	it("retains at most the cap plus its scan tails while reading, and nothing after end or a refusal", () => {
+		const cap = 64 * 1024;
+
+		const tails =
+			8 * forms.reduce((most, form) => Math.max(most, form.length), 0);
+
+		const body = cleanBody(200 * 1024);
+		const clean = new ReflectionFilter(forms);
+
+		for (let at = 0; at < body.length; at += 1024) {
+			clean.push(body.subarray(at, at + 1024));
+		}
+
+		assert.equal(clean.retained >= body.length, true, `${clean.retained}`);
+		assert.equal(
+			clean.retained <= 2 * body.length + tails,
+			true,
+			`${clean.retained}`,
+		);
+
+		const released = clean.end();
+
+		assert.equal(released.kind === "pass" && released.bytes.equals(body), true);
+		assert.equal(clean.retained, 0);
+
+		const capped = new ReflectionFilter(forms, cap);
+		const over = cleanBody(cap + 1024);
+		let most = 0;
+		let blocked = false;
+
+		for (let at = 0; at < over.length && !blocked; at += 1024) {
+			blocked = capped.push(over.subarray(at, at + 1024)).kind === "blocked";
+			most = Math.max(most, capped.retained);
+		}
+
+		assert.equal(blocked, true);
+		assert.equal(most <= cap + tails, true, `${most}`);
+		assert.equal(capped.retained, 0);
+
+		const leaky = new ReflectionFilter(forms);
+
+		leaky.push(body.subarray(0, 4096));
+		assert.equal(leaky.retained > 0, true);
+		assert.equal(leaky.push(Buffer.from(`"${ECHO_SECRET}"`)).kind, "blocked");
+		assert.equal(leaky.retained, 0);
+
+		const late = new ReflectionFilter(forms);
+
+		late.push(gappedBase64(ECHO_SECRET));
+		assert.equal(late.end().kind, "blocked");
+		assert.equal(late.retained, 0);
 	});
 
 	it("refuses a C1 control character, whole or split across chunks", () => {
@@ -906,6 +1006,6 @@ describe("reflection scanning", () => {
 		const result = filtered(large, 1024);
 
 		assert.equal(result.blocked, false);
-		assert.deepEqual(result.out, large);
+		assert.equal(result.out.equals(large), true);
 	});
 });
