@@ -1154,6 +1154,22 @@ describe("gateway credential engine against the echo fixture", () => {
 		}
 	});
 
+	it("keeps neither half of a secret split by a five-deep encoded slash", async () => {
+		const head = ECHO_SECRET.slice(0, 16);
+		const tail = ECHO_SECRET.slice(16);
+
+		for (const separator of ["%252f", "%252525252f"]) {
+			const path = `/plain/api/${head}${separator}${tail}`;
+
+			await call(h.socketPath, "GET", path);
+
+			const logged = h.audit.at(-1)?.path ?? "";
+
+			assert.equal(logged.includes(head), false, logged);
+			assert.equal(logged.includes(tail), false, logged);
+		}
+	});
+
 	it("keeps neither half of a secret split by %3f or %2e, admitted or denied as ambiguous", async () => {
 		const head = ECHO_SECRET.slice(0, 16);
 		const tail = ECHO_SECRET.slice(16);

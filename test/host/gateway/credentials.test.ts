@@ -806,4 +806,106 @@ describe("reflection scanning", () => {
 
 		assert.equal(Buffer.concat(out).toString(), parts.join(""));
 	});
+
+	const filtered = (body: Buffer, size: number) => {
+		const filter = new ReflectionFilter(forms);
+		const passed: Buffer[] = [];
+
+		for (let at = 0; at < body.length; at += size) {
+			const step = filter.push(body.subarray(at, at + size));
+
+			if (step.kind === "blocked") {
+				return { blocked: true, out: Buffer.concat(passed) };
+			}
+
+			passed.push(step.bytes);
+		}
+
+		const rest = filter.end();
+
+		if (rest.kind === "blocked") {
+			return { blocked: true, out: Buffer.concat(passed) };
+		}
+
+		return { blocked: false, out: Buffer.concat([...passed, rest.bytes]) };
+	};
+
+	it("finds the secret as mixed-case hex with spaces between the pairs", () => {
+		const hex = Buffer.from(`leak ${ECHO_SECRET}`).toString("hex");
+
+		let letters = 0;
+
+		const spaced = [...hex]
+			.map((char) => {
+				if (!/[a-f]/.test(char)) return char;
+
+				letters += 1;
+
+				return letters % 2 === 0 ? char.toUpperCase() : char;
+			})
+			.join("")
+			.replace(/(.{2})/g, "$1 ")
+			.trim();
+
+		assert.notEqual(spaced, spaced.toLowerCase());
+
+		for (const size of [1, 3, spaced.length]) {
+			const result = filtered(Buffer.from(spaced), size);
+
+			assert.equal(result.blocked, true, `${size}-byte chunks`);
+			assert.equal(result.out.length, 0, `${size}-byte chunks`);
+		}
+	});
+
+	it("finds base64 split by non-alphabet runs longer than the hold, at any chunking", () => {
+		const base64 = Buffer.from(`leak ${ECHO_SECRET}`).toString("base64");
+		const hold = Math.max(...forms.map((form) => form.length)) * 6 - 1;
+
+		for (const gap of ["!", "\n"]) {
+			const body = Buffer.from([...base64].join(gap.repeat(hold + 8)));
+
+			for (const size of [1, 64, body.length]) {
+				assert.equal(
+					filtered(body, size).blocked,
+					true,
+					`${JSON.stringify(gap)} gaps in ${size}-byte chunks`,
+				);
+			}
+		}
+	});
+
+	it("refuses a C1 control character, whole or split across chunks", () => {
+		for (const text of ['{"note":"caf\u0085 next"}', "plain text \u009f end"]) {
+			const body = Buffer.from(text);
+
+			for (const size of [1, 3, body.length]) {
+				const result = filtered(body, size);
+
+				assert.equal(result.blocked, true, `${text} in ${size}-byte chunks`);
+				assert.equal(result.out.includes(Buffer.from([0xc2])), false, text);
+			}
+		}
+	});
+
+	it("passes non-ASCII text and emoji unchanged at any chunking", () => {
+		const body = Buffer.from(
+			'{"title":"caf\u00e9 \u{1f600} \u65e5\u672c\u8a9e \u00a0\u00ff\u0100","ok":true}\n',
+		);
+
+		for (const size of [1, 2, 3, body.length]) {
+			const result = filtered(body, size);
+
+			assert.equal(result.blocked, false, `${size}-byte chunks`);
+			assert.deepEqual(result.out, body, `${size}-byte chunks`);
+		}
+
+		const large = Buffer.from(
+			`{"items":[${Array.from({ length: 4000 }, (_, index) => `{"i":${index},"t":"caf\u00e9 \u{1f600}"}`).join(",")}]}`,
+		);
+
+		const result = filtered(large, 1024);
+
+		assert.equal(result.blocked, false);
+		assert.deepEqual(result.out, large);
+	});
 });

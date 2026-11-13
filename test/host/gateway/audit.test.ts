@@ -384,6 +384,30 @@ describe("gateway audit", () => {
 		);
 	});
 
+	it("redacts a path that still holds an escape after four decode rounds", () => {
+		const secret = "fixture-secret-7Hq2-not-real";
+		const [head, tail] = [secret.slice(0, 14), secret.slice(14)];
+
+		const scanner = new SecretScanner(
+			secretForms(Buffer.from(secret), {
+				kind: "header",
+				name: "Authorization",
+				scheme: "Bearer",
+			}),
+		);
+
+		const reveals = (text: string) => scanner.reveals(text);
+
+		for (const separator of ["%2525252f", "%252525252f", "%25252525252e"]) {
+			const path = `/npm/${head}${separator}${tail}`;
+
+			assert.equal(redactPath(path, reveals), "[redacted]", path);
+		}
+
+		assert.equal(redactPath("/npm/%2525252541"), "[redacted]");
+		assert.equal(redactPath("/npm/%25252541"), "/npm/%25252541");
+	});
+
 	it("writes one JSON line per request with fixed fields and no secrets", () => {
 		const line = auditLine(record());
 

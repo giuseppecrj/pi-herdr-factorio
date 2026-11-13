@@ -102,32 +102,39 @@ export const REDACTED_SEGMENT = "~redacted~";
 
 const DECODE_ROUNDS = 4;
 
-/** The path with `%XX` escapes decoded until none is left, at most four times. */
-function decodedPath(path: string): string {
+const ESCAPE = /%([0-9A-Fa-f]{2})/g;
+
+/**
+ * The path with `%XX` escapes decoded until none is left, at most four
+ * times, or null when an escape is still left after the fourth.
+ */
+function decodedPath(path: string): string | null {
 	let text = path;
 
 	for (let round = 0; round < DECODE_ROUNDS; round += 1) {
-		const next = text.replace(/%([0-9A-Fa-f]{2})/g, (_, hex: string) =>
+		const next = text.replace(ESCAPE, (_, hex: string) =>
 			String.fromCharCode(Number.parseInt(hex, 16)),
 		);
 
-		if (next === text) break;
+		if (next === text) return text;
 
 		text = next;
 	}
 
-	return text;
+	return text.search(ESCAPE) === -1 ? text : null;
 }
 
 /**
  * The decoded path with its separators removed: once without `/` and `\`,
  * and once also without `?`, `.` and `#`. The first keeps a secret that
- * holds a dot whole.
+ * holds a dot whole. Null when the path does not decode within four rounds.
  */
-function joinedPaths(path: string): string[] {
+function joinedPaths(path: string): string[] | null {
 	const plain = decodedPath(path);
 
-	return [plain.replace(/[/\\]/g, ""), plain.replace(/[/\\?.#]/g, "")];
+	return plain === null
+		? null
+		: [plain.replace(/[/\\]/g, ""), plain.replace(/[/\\?.#]/g, "")];
 }
 
 /**
@@ -136,7 +143,9 @@ function joinedPaths(path: string): string[] {
  * outside `[A-Za-z0-9._~/%-]` becomes `_`. When a secret shows only once
  * the path is decoded and its separators removed, as when a `/`, `%2f`,
  * `%3f`, `%2e`, a dot segment or a fragment splits it, the whole path
- * becomes `[redacted]`; the gateway logs the route's template instead.
+ * becomes `[redacted]`; the gateway logs the route's template instead. A
+ * path still holding a `%XX` escape after four decode rounds is
+ * `[redacted]` too, because no scan has read it whole.
  */
 export function redactPath(
 	target: string,
@@ -150,7 +159,11 @@ export function redactPath(
 		.map((segment) => (isSecret(segment) ? REDACTED_SEGMENT : segment))
 		.join("/");
 
-	if (isSecret(kept) || joinedPaths(kept).some(isSecret)) return REDACTED_PATH;
+	const joined = joinedPaths(kept);
+
+	if (isSecret(kept) || joined === null || joined.some(isSecret)) {
+		return REDACTED_PATH;
+	}
 
 	const safe = kept.replace(/[^A-Za-z0-9._~/%-]/g, "_").slice(0, PATH_MAX);
 

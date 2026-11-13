@@ -626,16 +626,20 @@ function base64Only(bytes: Buffer): Buffer {
 
 /**
  * The views a secret is looked for in: raw, JSON-unescaped,
- * percent-decoded, whitespace-stripped, lower-cased and base64-alphabet
- * only. Hex and UTF-16 are forms of the secret, so the raw view finds them.
+ * percent-decoded, whitespace-stripped, lower-cased, both whitespace-stripped
+ * and lower-cased, and base64-alphabet only. Hex and UTF-16 are forms of the
+ * secret, so the raw view finds them.
  */
 export function decodedViews(bytes: Buffer): Buffer[] {
+	const stripped = withoutWhitespace(bytes);
+
 	return [
 		bytes,
 		jsonUnescaped(bytes),
 		percentDecoded(bytes),
-		withoutWhitespace(bytes),
+		stripped,
 		lowerCased(bytes),
+		lowerCased(stripped),
 		base64Only(bytes),
 	];
 }
@@ -721,14 +725,20 @@ function binaryByte(byte: number): boolean {
 	);
 }
 
+/** A Unicode control character outside ASCII, U+0080 to U+009F. */
+const C1_CONTROL = /[\u0080-\u009f]/;
+
 /**
  * Streams a credentialed response body. Every byte must be UTF-8 text with
- * no control character but tab, line feed, form feed and carriage return,
- * because compressed data, framed or not and at any offset, is not text.
- * Nothing passes until the first four bytes show no compression magic.
- * After that it holds back enough bytes that a secret split across chunks,
- * JSON-escaped, percent-encoded, hex in any case, UTF-16, or base64 split by
- * bytes outside its alphabet, is found before any of its bytes leave.
+ * no control character, ASCII or C1, but tab, line feed, form feed and
+ * carriage return, because compressed data, framed or not and at any
+ * offset, is not text. Nothing passes until the first four bytes show no
+ * compression magic. After that it holds back enough bytes that a secret
+ * split across chunks, JSON-escaped, percent-encoded, hex in any case,
+ * UTF-16, or base64 split by bytes outside its alphabet, is found before
+ * any of its bytes leave. It also keeps the body's last base64-alphabet
+ * bytes across chunks, so base64 split by longer runs outside its alphabet
+ * still blocks the body before its last byte leaves.
  *
  * This scan is defense in depth and cannot be complete: an upstream can
  * always re-encode a secret as text no scan reads. The primary control is
@@ -740,6 +750,7 @@ export class ReflectionFilter {
 	readonly #hold: number;
 	readonly #utf8 = new TextDecoder("utf-8", { fatal: true });
 	#held: Buffer = Buffer.alloc(0);
+	#alphabet: Buffer = Buffer.alloc(0);
 	#probed = false;
 
 	constructor(forms: readonly Buffer[]) {
@@ -751,12 +762,21 @@ export class ReflectionFilter {
 		if (chunk.some(binaryByte)) return false;
 
 		try {
-			this.#utf8.decode(chunk, { stream: !final });
-
-			return true;
+			return !C1_CONTROL.test(this.#utf8.decode(chunk, { stream: !final }));
 		} catch {
 			return false;
 		}
+	}
+
+	/** True when the body's base64-alphabet bytes so far, `unread` included, hold a secret. */
+	#alphabetReveals(unread: Buffer): boolean {
+		const alphabet = Buffer.concat([this.#alphabet, base64Only(unread)]);
+
+		this.#alphabet = alphabet.subarray(
+			Math.max(0, alphabet.length - this.#scanner.longest),
+		);
+
+		return this.#scanner.contains(alphabet);
 	}
 
 	push(chunk: Buffer): FilterStep {
@@ -776,7 +796,11 @@ export class ReflectionFilter {
 			unread = joined;
 		}
 
-		if (!this.#text(unread, false) || this.#scanner.reveals(joined)) {
+		if (
+			!this.#text(unread, false) ||
+			this.#scanner.reveals(joined) ||
+			this.#alphabetReveals(unread)
+		) {
 			return { kind: "blocked" };
 		}
 
