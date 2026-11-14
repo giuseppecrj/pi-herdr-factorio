@@ -307,6 +307,16 @@
 				],
 				"since": "L13"
 			},
+			"host/controller/feed-generation.ts": {
+				"owner": "host/controller",
+				"seats": [
+					"code-review",
+					"security-review",
+					"simplify"
+				],
+				"from": [],
+				"since": "#723"
+			},
 			"host/controller/serve-loop.ts": {
 				"owner": "host/controller",
 				"seats": [
@@ -3662,6 +3672,24 @@
 					"via": {
 						"from": "reader",
 						"path": "../.github/factory/WORKFLOW.md"
+					}
+				}
+			]
+		},
+		{
+			"id": "test-reads-feed-generation",
+			"kind": "paths",
+			"reader": "test/host/controller/feed-generation.test.ts",
+			"tokens": {
+				"new URL(\"../../fixtures/owner-feed/fixed-clock.ts\", import.meta.url)": 1
+			},
+			"targets": [
+				{
+					"path": "test/fixtures/owner-feed/fixed-clock.ts",
+					"type": "file",
+					"via": {
+						"from": "reader",
+						"path": "../../fixtures/owner-feed/fixed-clock.ts"
 					}
 				}
 			]

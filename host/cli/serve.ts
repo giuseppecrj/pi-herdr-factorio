@@ -19,6 +19,7 @@ import {
 	startMetricSnapshots,
 } from "../controller/serve-loop.ts";
 import { pinVerification, writeStatus } from "../controller/state.ts";
+import { refreshFeedGeneration } from "../controller/feed-generation.ts";
 import {
 	durableUsageOf,
 	readDurableAccounting,
@@ -87,6 +88,7 @@ export async function runController(
 	}
 
 	const { lock } = acquired;
+	let feedStarted = false;
 
 	try {
 		if (acquired.replaced !== null) {
@@ -223,6 +225,8 @@ export async function runController(
 				log,
 			});
 
+		feedStarted = true;
+
 		if (parsed.command === "serve") {
 			log("controller_ready", {
 				pid: lock.holder.pid,
@@ -303,6 +307,7 @@ export async function runController(
 		await pump();
 		await scorePump();
 		await cadence?.stop();
+
 		io.stdout(json(report));
 
 		if (parsed.command === "tick") return EXIT.ok;
@@ -312,5 +317,15 @@ export async function runController(
 			: EXIT.invalid;
 	} finally {
 		await lock.release();
+
+		if (
+			feedStarted &&
+			!(await refreshFeedGeneration({
+				stateDir: parsed.stateDir,
+				platform,
+				now: clock.now(),
+			}))
+		)
+			log("feed_generation_unwritable", {});
 	}
 }

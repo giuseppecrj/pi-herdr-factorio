@@ -36,7 +36,7 @@ The development-machine figures ran with Node 26.13.0 on the seven-run state tha
 
 The VM figure comes from the independent verifier's run of ten CLI reads on the `pi-factorio` VM on 2026-11-10. Three more sets of ten had medians of 694, 696.5 and 728 ms. **Plan against the VM figure, not the development-machine one.** The VM reads about 2.2 times slower. Production state has more runs than the fixture. The F09c performance probe in `docs/plans/active/factory-v1.md` found feed work under its 500 ms limit on a copy of production state, and it excluded Node start-up from that limit.
 
-**Recommendation.** Read the CLI. It needs no second process. On exmach the viewer stays on loopback, so the route only helps when someone already runs a viewer.
+**Recommendation.** Read the CLI when the private [feed-changed signal](#feed-changed-signal) changes, with periodic full reads as a safety net. It needs no second process. The viewer route helps when someone already runs a viewer.
 
 **Allowed read rate (proposal).** The code enforces no rate. Read at most once every 5 seconds while the app is open and once every 60 seconds in the background. Keep one read in flight. On the VM, one CLI read takes about 620 ms of wall time, so one read every 5 seconds uses about 12% of each 5-second slot. One read every 60 seconds uses about 1%. The proposed rates still hold at that cost.
 
@@ -48,6 +48,31 @@ Two host probes deliberately keep different rules:
 - The controller lock uses `readLock` in `host/controller/state.ts`. It probes the controller socket and reads the holder file without the feed's private-file checks. It supplies only `running`, `stopped` or `unavailable`, never holder text.
 
 A bridge running as another user usually gets an unavailable feed, not an error, because the state directory itself fails the check. These checks apply to feed reads, not a change to the admission or status CLI's storage policy.
+
+### Feed-changed signal
+
+`$STATE/feed-generation` is a separate private file, not an OwnerFeed field. OwnerFeed stays v1 and returns identical bytes whether this file exists or not. Production needs an upgrade approved by Giuseppe before the signal exists on `nubl-factory`. This change does not deploy it or update the Shep bridge.
+
+The file contains 64 lowercase SHA-256 hexadecimal characters and one LF, exactly 65 bytes. Treat the value as opaque, not as a counter or a timestamp. The controller hashes its own `readOwnerFeed` projection, so feed-visible status, claims, admissions, intake markers, questions, ledger rows and terminal records all use the feed's existing readers. Metrics, stage receipts, validation, links, accounting, the local switch and controller state are covered too.
+
+The hash excludes `at`, `entries[].ageMs` and `controller.lastTick`. These clock and heartbeat fields would otherwise change on every idle tick. Stale-threshold crossings and seven-day terminal expiry still change the hash. A routine `status.json` rewrite changes neither the value nor the file when the remaining projection is unchanged. No OwnerFeed fields or timestamp semantics change.
+
+`serve` refreshes the signal after each tick, status write and ledger pump. Changes between ticks appear at the next completed tick, normally about 30 seconds later, not at every bridge poll. `tick` and `run` refresh it on completion. Graceful shutdown refreshes it after releasing the controller lock. A crash cannot publish its own stopped state. Slow ticks, out-of-band writes and background metric updates can delay the signal until the next tick.
+
+The state directory and file must belong to the effective Unix user, with no group or other permissions. Neither may be a symlink. The writer creates a mode-0600 temporary file, syncs it and renames it atomically. It refuses an existing unsafe or malformed signal instead of replacing it and logs `feed_generation_unwritable`. The feed remains readable if publication fails.
+
+A resident bridge can import `readFeedGeneration` from `host/controller/feed-generation.ts` and call it with the state directory. It returns the digest without LF, or null when missing, unsafe or malformed. An independent reader must lstat the private state directory, open the file with `O_NOFOLLOW | O_NONBLOCK`, fstat that descriptor for a regular, owner-only 65-byte file, and validate `^[a-f0-9]{64}\n$`. It must read from that descriptor, not reopen the path after checking it. No CLI process is needed for this read.
+
+The Shep bridge must:
+
+1. Read the signal every few seconds, for example every 5 seconds, with one feed read in flight per state-directory and repository pair.
+2. Run `owner-feed --json` on the first read and whenever the signal differs from the value accepted with the last successful feed read. Use the repository served by that state directory. The signal covers its default feed, not arbitrary `--repo` overrides.
+3. Accept the signal sampled before that feed read only after the feed succeeds and is available. Keep the existing seed and push rules. A signal change alone never sends a push.
+4. Run a full feed read at least every 60 seconds even if the signal stays unchanged. Continue full polling when the signal is missing, invalid or unreadable. Do not interpret those cases as unchanged or erase cached entries.
+
+The periodic read catches crashes and missed publications and refreshes ages and heartbeat timestamps. It remains required after the bridge adopts the signal.
+
+On the development machine with Node 26.13.0 on 2026-11-14, the seven-run fixture measured a 0.047 ms median validated signal read over 1,000 reads, versus 317.4 ms for 10 full CLI reads. Unchanged signal publication took 4.04 ms median. Signal reads ran in a resident process; CLI reads included process and module startup. `node test/fixtures/owner-feed/measure-generation.ts` reproduces the measurement. These are local fixture results, not a measured production improvement or a replacement for the historical VM baseline.
 
 ### Read several repositories
 
