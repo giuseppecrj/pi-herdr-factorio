@@ -10,6 +10,7 @@ import type {
 } from "../../src/controller/orchestrator.ts";
 import type { PlatformProfile } from "../../src/trust/platform.ts";
 import { parseJson, writeAtomic, writeStatus } from "./state.ts";
+import { refreshFeedGeneration } from "./feed-generation.ts";
 
 const LOG_VALUE = /^[A-Za-z0-9:._@/[\]+-]*$/;
 
@@ -215,6 +216,15 @@ export async function serveLoop(input: {
 		scores();
 
 		await input.pump?.();
+
+		if (
+			!(await refreshFeedGeneration({
+				stateDir: input.stateDir,
+				platform: input.platform,
+				now: Date.parse(report.at),
+			}))
+		)
+			log("feed_generation_unwritable", {});
 
 		if (signal.aborted) break;
 
