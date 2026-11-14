@@ -191,6 +191,8 @@ export async function runController(
 					: null,
 		});
 
+		feedStarted = true;
+
 		if (parsed.command === "cadence" && parsed.job !== undefined) {
 			const report = await orchestrator.cadenceOnce(parsed.job);
 			await cadence?.stop();
@@ -224,8 +226,6 @@ export async function runController(
 				platform,
 				log,
 			});
-
-		feedStarted = true;
 
 		if (parsed.command === "serve") {
 			log("controller_ready", {

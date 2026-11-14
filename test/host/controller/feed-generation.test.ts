@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
 	chmod,
 	mkdir,
@@ -29,6 +30,7 @@ import { ledgerRowOf, legacyRunContext } from "../../../src/ledger/schema.ts";
 import { isGitSha } from "../../../src/config/schema.ts";
 import {
 	addRun,
+	addAnsweredRun,
 	ownerState,
 	now,
 	repo,
@@ -98,6 +100,146 @@ test("feed generation is stable across routine status rewrites and a fresh serve
 		assert.equal(info.mode & 0o777, 0o600);
 		assert.equal(info.uid, process.geteuid?.());
 		assert.equal(info.isSymbolicLink(), false);
+	});
+});
+
+test("feed generation is SHA-256 of the real CLI projection with only three clock fields normalized", async () => {
+	await fixture(async (root) => {
+		await addAnsweredRun(root, 21, "Continue after an answer");
+		const unverified = await addRun(root, 22, "running");
+
+		const waiting = (
+			await readOwnerFeed({ stateDir: root, repo, now })
+		).entries.find((entry) => entry.issue === 1)?.runId;
+
+		assert.ok(waiting);
+
+		const status = JSON.parse(
+			await readFile(join(root, "status.json"), "utf8"),
+		);
+
+		await save(root, ["status.json"], {
+			...status,
+			attentionThresholds: {
+				waitingMs: 5 * 86_400_000,
+				blockedMs: 8 * 3_600_000,
+			},
+			unverifiedClaims: [
+				{
+					runId: unverified,
+					issue: 22,
+					eventId: "1",
+					since: now - 1000,
+					why: "issue",
+					failure: null,
+				},
+			],
+			feedbackIntake: [
+				{
+					runId: waiting,
+					issue: 1,
+					eventId: "1",
+					pr: 5,
+					kind: "unavailable",
+					reason: "reviews",
+					failure: "gh_failed",
+					since: now - 2000,
+				},
+			],
+		});
+
+		const verify = async () => {
+			const published = await tick(root);
+
+			const { stdout } = await run(
+				process.execPath,
+				[
+					"--import",
+					new URL("../../fixtures/owner-feed/fixed-clock.ts", import.meta.url)
+						.pathname,
+					"host/cli/index.ts",
+					"owner-feed",
+					"--json",
+					"--state-dir",
+					root,
+				],
+				{ env: { ...process.env, OWNER_FEED_FIXED_NOW: String(now) } },
+			);
+
+			const feed: Awaited<ReturnType<typeof readOwnerFeed>> =
+				JSON.parse(stdout);
+
+			const hash = (text: string) =>
+				createHash("sha256").update(text).digest("hex");
+
+			const normalized = JSON.stringify(feed, (key, value) =>
+				["at", "ageMs", "lastTick"].includes(key) ? null : value,
+			);
+
+			assert.equal(published.trim(), hash(normalized));
+			const restored = JSON.parse(normalized);
+			restored.at = feed.at;
+			restored.controller.lastTick = feed.controller.lastTick;
+
+			for (const [index, entry] of feed.entries.entries())
+				restored.entries[index].ageMs = entry.ageMs;
+			assert.equal(
+				hash(JSON.stringify(restored)),
+				hash(JSON.stringify(feed)),
+				"normalization retains everything except at, entries[].ageMs and controller.lastTick",
+			);
+
+			return feed;
+		};
+
+		const held = await verify();
+		assert.equal(
+			held.entries.find((entry: { issue: number }) => entry.issue === 22)
+				?.reason,
+			"claim_unverified:issue",
+		);
+		assert.equal(
+			held.entries.find((entry: { issue: number }) => entry.issue === 1)
+				?.reason,
+			"feedback_unavailable:reviews:gh_failed",
+		);
+		await save(root, ["status.json"], {
+			...status,
+			attentionThresholds: {
+				waitingMs: 5 * 86_400_000,
+				blockedMs: 8 * 3_600_000,
+			},
+		});
+		const feed = await verify();
+
+		for (const kind of [
+			null,
+			"question_asked",
+			"question_answered",
+			"pr_review",
+			"blocked",
+			"budget",
+			"failed",
+		])
+			assert.ok(
+				feed.entries.some(
+					(entry: { kind: string | null }) => entry.kind === kind,
+				),
+				String(kind),
+			);
+		assert.ok(
+			feed.entries.some((entry: { terminal: boolean }) => entry.terminal),
+		);
+		assert.ok(feed.gaps.length > 0);
+		assert.ok(feed.unreadable.length > 0);
+		assert.equal(
+			feed.entries.find((entry: { issue: number }) => entry.issue === 1)?.stale,
+			false,
+		);
+		assert.equal(
+			feed.entries.find((entry: { issue: number }) => entry.issue === 2)?.stale,
+			false,
+		);
 	});
 });
 
@@ -421,7 +563,7 @@ test("feed generation retains time-driven stale and terminal-retention changes",
 	});
 });
 
-for (const command of ["tick", "serve"] as const) {
+for (const command of ["tick", "serve", "cadence"] as const) {
 	test(`${command} publishes the stopped feed after releasing the controller lock`, async () => {
 		const root = await mkdtemp(join(tmpdir(), "feed-generation-cli-"));
 
@@ -440,15 +582,31 @@ for (const command of ["tick", "serve"] as const) {
 					[
 						command,
 						...(command === "tick" ? ["--once", "--json"] : []),
+						...(command === "cadence"
+							? ["--once", "--job", "architecture"]
+							: []),
 						"--repo",
 						cliRepo,
 						"--state-dir",
 						root,
-						"--issue",
-						"20",
+						...(command === "cadence" ? [] : ["--issue", "20"]),
 					],
 					{
-						exec: github.exec,
+						exec: async (...args) => {
+							if (command === "cadence" && running === null) {
+								assert.equal(
+									await refreshFeedGeneration({
+										stateDir: root,
+										platform,
+										now,
+									}),
+									true,
+								);
+								running = await readFeedGeneration(root);
+							}
+
+							return github.exec(...args);
+						},
 						env: (name) => (name === "GH_HOST" ? platform.ghHost : undefined),
 						readPlatformFile: noPlatformFile,
 						stdout: () => undefined,
@@ -465,12 +623,12 @@ for (const command of ["tick", "serve"] as const) {
 						},
 					},
 				),
-				0,
+				command === "cadence" ? 1 : 0,
 			);
 			const stopped = await readFeedGeneration(root);
 			assert.ok(stopped !== null);
 
-			if (command === "serve") {
+			if (command !== "tick") {
 				assert.ok(running !== null);
 				assert.notEqual(stopped, running);
 			}

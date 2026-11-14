@@ -3681,7 +3681,7 @@
 			"kind": "paths",
 			"reader": "test/host/controller/feed-generation.test.ts",
 			"tokens": {
-				"new URL(\"../../fixtures/owner-feed/fixed-clock.ts\", import.meta.url)": 1
+				"new URL(\"../../fixtures/owner-feed/fixed-clock.ts\", import.meta.url)": 2
 			},
 			"targets": [
 				{
